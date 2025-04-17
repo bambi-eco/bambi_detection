@@ -2,6 +2,7 @@ import json
 import os
 import time
 from enum import Enum
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -73,7 +74,7 @@ if __name__ == '__main__':
     steps_to_do = {
         "extract_frames": False, # if frames are already available from previous export, set to false
         "project_frames": False,
-        "projection_method": ProjectionType.AlfsProjection,
+        "projection_method": ProjectionType.NoProjection,
         "detect_animals": True
     }
 
@@ -276,7 +277,8 @@ if __name__ == '__main__':
         m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence)
         bb_writer = YoloWriter()
 
-        bounding_boxes = []
+        skip = True
+
         for imagefile_idx in range(0, frame_count):
             if steps_to_do["projection_method"] == ProjectionType.AlfsProjection and imagefile_idx < alfs_number_of_neighbors:
                 continue
@@ -287,6 +289,12 @@ if __name__ == '__main__':
             image_metadata = poses["images"][imagefile_idx]
             image = os.path.join(target_folder, image_metadata["imagefile"])
 
+            if image.endswith("5345-5464-5464.jpg"):
+                skip = False
+
+            if skip:
+                continue
+
             if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
                 image = image.replace(".", "_projected.")
             elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
@@ -295,16 +303,17 @@ if __name__ == '__main__':
             if not os.path.exists(image):
                 print(f"Input image not available. Skip it. {image}")
                 continue
-
-            for tile in tile_image(cv2.imread(image, cv2.IMREAD_UNCHANGED), 1024):
+            bounding_boxes = []
+            current_image = cv2.imread(image, cv2.IMREAD_UNCHANGED)
+            for tile in tile_image(current_image, INPUT_WIDTH):
                 boxes = m.detect_frame(imagefile_idx, tile[2])
                 for box in boxes:
                     box.start_x += tile[0]
                     box.end_x += tile[0]
                     box.start_y += tile[1]
                     box.end_y += tile[1]
-                    bounding_boxes.extend(box)
-        bb_writer.write_boxes(target_folder, m.get_labels(), bounding_boxes)
-
+                    bounding_boxes.append(box)
+            bb_writer.write_boxes(target_folder, m.get_labels(), [(Path(image).stem, current_image, bounding_boxes)])
+            break
     else:
         print("3. Skipping wildlife detection")
