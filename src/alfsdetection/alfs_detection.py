@@ -72,7 +72,7 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         "extract_frames": False, # if frames are already available from previous export, set to false
-        "project_frames": True,
+        "project_frames": False,
         "projection_method": ProjectionType.AlfsProjection,
         "detect_animals": True
     }
@@ -299,6 +299,10 @@ if __name__ == '__main__':
             for tile in tile_image(cv2.imread(image, cv2.IMREAD_UNCHANGED), 1024):
                 boxes = m.detect_frame(imagefile_idx, tile[2])
                 for box in boxes:
+                    box.start_x += tile[0]
+                    box.end_x += tile[0]
+                    box.start_y += tile[1]
+                    box.end_y += tile[1]
                     bounding_boxes.extend(box)
         bb_writer.write_boxes(target_folder, m.get_labels(), bounding_boxes)
 
