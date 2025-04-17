@@ -73,10 +73,13 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         "extract_frames": False, # if frames are already available from previous export, set to false
-        "project_frames": False,
-        "projection_method": ProjectionType.NoProjection,
-        "detect_animals": True
+        "project_frames": False, # if frames are already projected (or you don't want to project them at all), set to false
+        "projection_method": ProjectionType.NoProjection, # define the projection style that should be used
+        "detect_animals": True # flag if wildlife detection should be executed after data preparation
     }
+
+    # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
+    # However, the videos have to be downloaded separately (see /alfs_detection/testdata/stpankraz/todo.txt)
 
     # Define input data
     videos = [
@@ -90,8 +93,7 @@ if __name__ == '__main__':
     path_to_dem_json = path_to_dem.replace(".gltf", ".json")
     path_to_calibration = r"C:\Users\P41743\Desktop\stpankraz\T_calib.json"
     path_to_flight_correction = r"C:\Users\P41743\Desktop\stpankraz\correction.json"
-    drone_name = "M30T"
-    camera_name = "T"
+    camera_name = "T" # Name of the camera, either T or W
 
     # Define rendering settings
     sample_rate = 1
@@ -121,6 +123,8 @@ if __name__ == '__main__':
 
     if steps_to_do["extract_frames"]:
         print("1. Extracting frames")
+
+        # prepare all input files for the timed pose extractor
         with open(path_to_dem_json, "r") as f:
             dem_json = json.load(f)
             origin = dem_json["origin_wgs84"]
@@ -132,14 +136,14 @@ if __name__ == '__main__':
 
         with open(path_to_calibration) as f:
             calibration_res = json.load(f)
+
+        # prepare the required objects for extracting the video frames
         accessor = CalibratedVideoFrameAccessor(calibration_res)
         extractor = TimedPoseExtractor(
             accessor, camera_name=Camera.from_string(camera_name)
         )
 
-        sr = SensorResolution(
-            Drone.from_string(drone_name), Camera.from_string(camera_name)
-        )
+        # now lets start the hard video frame mining
         extractor.extract(
             target_folder, air_data_path, videos, srts, origin=ad_origin, include_gps=True
         )
@@ -149,37 +153,44 @@ if __name__ == '__main__':
     #####################################################################################################################################################################
 
     # Step 2: Access frames
+    # get the poses file we will need it multiple times
     with open(os.path.join(target_folder, "poses.json"), "r") as f:
         poses = json.load(f)
     frame_count = len(poses["images"])
 
     if steps_to_do["project_frames"] and steps_to_do["projection_method"] != ProjectionType.NoProjection:
         print("2. Starting projection")
+        # get all the flight correction data
         with open(path_to_flight_correction, 'r') as file:
             correction = json.load(file)
-
         translation = correction.get('translation', {'x': 0, 'y': 0, 'z': 0})
         cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-
         rotation = correction.get('rotation', {'x': 0, 'y': 0, 'z': 0})
         cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
         correction = Transform(cor_translation, Quaternion.from_eulers(cor_rotation_eulers))
 
+        # prepare some variables for later releasing resources
         ctx = None
         mask_shot = None
         mesh_data = None
         texture_data = None
         tri_mesh = None
         try:
+            # load digital elevation model
             time.sleep(5) # whyever but needed for trimesh and gltf loading
             mesh_data, texture_data = read_gltf(path_to_dem)
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+
+            # initialize the ModernGL context
             ctx = make_mgl_context()
             mesh_aabb = get_aabb(mesh_data.vertices)
+
+            # prepare the mask file
             mask_shot = CtxShot._cvt_img(cv2.imread(os.path.join(target_folder, f"mask_{camera_name}.png"), cv2.IMREAD_UNCHANGED))
             mask = TextureData(mask_shot)
 
+            # prepare the camera settings
             input_resolution = Resolution(INPUT_WIDTH, INPUT_HEIGHT)
             render_resolution = Resolution(RENDER_WIDTH, RENDER_HEIGHT)
             settings = BaseSettings(
@@ -188,23 +199,30 @@ if __name__ == '__main__':
                 ortho_size=(ORTHO_WIDTH, ORTHO_HEIGHT), correction=correction, resolution=render_resolution
             )
 
+            # now it is time to project the video frames
             for imagefile_idx in range(0, frame_count):
                 if steps_to_do["projection_method"] == ProjectionType.AlfsProjection and imagefile_idx < alfs_number_of_neighbors:
+                    # skip the first x frames if ALFS should be applied since there is no "negative neighborhood" only positive people around ;)
                     continue
 
                 if imagefile_idx % sample_rate != 0:
+                    # skip some frames based on the sampling rate
                     continue
 
-
+                # get the image related information from the poses file
                 image_metadata = poses["images"][imagefile_idx]
                 image = os.path.join(target_folder, image_metadata["imagefile"])
                 print(f"Rendering image {image}")
                 if not os.path.exists(image):
+                    # if source image is for whatever reason not available skip it
                     print(f"Input image not available. Skip it. {image}")
                     continue
+
+                # prepare some additional variables that have to be released
                 shot = None
                 renderer = None
                 try:
+                    # get the camera extrinsics
                     position = Vector3(image_metadata["location"])
                     rotation = image_metadata["rotation"]
                     rotation = [val % 360.0 for val in rotation]
@@ -217,15 +235,20 @@ if __name__ == '__main__':
 
                     fov = image_metadata["fovy"][0]
 
+                    # time to prepare the rendering
                     shot = create_shot(image, image_metadata, ctx, correction)
                     single_shot_camera = make_camera(mesh_aabb, [shot], settings, rotation=Quaternion.from_eulers(
                         [(eulers[0] - cor_rotation_eulers[0]), (eulers[1] - cor_rotation_eulers[1]),
                          (eulers[2] - cor_rotation_eulers[2])]))
                     renderer = Renderer(settings.resolution, ctx, single_shot_camera, mesh_data, texture_data)
 
+                    # now it is time to render our orthographic projections or light fields
                     if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
-                        shot_loader = make_shot_loader([shot])  # Create loader for single shot
+                        # we only want to render one image, so not too much to do
+                        shot_loader = make_shot_loader([shot])
                         save_name = image.replace(".", "_projected.")
+
+                        # time to render
                         renderer.project_shots(
                             shot_loader,
                             RenderResultMode.ShotOnly,
@@ -237,6 +260,7 @@ if __name__ == '__main__':
                         )
                         print(f"Rendered: {save_name}")
                     elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
+                        # for light fields we also have to get the neighboring frames before and after our central image
                         shots_before = []
                         shots_after = []
                         for image_before_idx in range(0, alfs_number_of_neighbors):
@@ -252,6 +276,8 @@ if __name__ == '__main__':
                                 image_after_metadata = poses["images"][idx]
                                 image_after = os.path.join(target_folder, image_before_metadata["imagefile"])
                                 shots_after.append(create_shot(image, image_metadata, ctx, correction))
+
+                        # together with the neighbors it is time to render
                         shot_loader = make_shot_loader(shots_before + [shot] + shots_after)
                         save_name = image.replace(".", "_alfs.")
                         renderer.render_integral(shot_loader,
@@ -261,8 +287,10 @@ if __name__ == '__main__':
                                                  save_name=save_name)
                         print(f"Rendered: {save_name}")
                 finally:
+                    # free up resources
                     release_all(renderer)
         finally:
+            # free up resources
             release_all(ctx, mask_shot)
             del mesh_data
             del texture_data
@@ -274,19 +302,25 @@ if __name__ == '__main__':
     # 3. Do wildlife detection
     if steps_to_do["detect_animals"]:
         print("3. Starting wildlife detection")
+        # now the final step has arrived: the inference of our AI models, so load it in the first glance
         m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence)
         bb_writer = YoloWriter()
 
         # todo remove in future: just for testing
         # skip = True
 
+        # now lets go over all images and use them for inference
         for imagefile_idx in range(0, frame_count):
-            if steps_to_do["projection_method"] == ProjectionType.AlfsProjection and imagefile_idx < alfs_number_of_neighbors:
+            if steps_to_do[
+                "projection_method"] == ProjectionType.AlfsProjection and imagefile_idx < alfs_number_of_neighbors:
+                # skip the first x frames if ALFS was applied since we don't have them rendered
                 continue
 
             if imagefile_idx % sample_rate != 0:
+                # skip some frames based on the sampling rate
                 continue
 
+            # get the image related information from the poses file
             image_metadata = poses["images"][imagefile_idx]
             image = os.path.join(target_folder, image_metadata["imagefile"])
 
@@ -297,24 +331,32 @@ if __name__ == '__main__':
             # if skip:
             #     continue
 
+            # however if we want to use the AI models on the orthographic projections or light fields, we have to adapt the file name
             if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
                 image = image.replace(".", "_projected.")
             elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
                 image = image.replace(".", "_alfs.")
 
+            # if file can't be found for whatever reason, skip it
             if not os.path.exists(image):
                 print(f"Input image not available. Skip it. {image}")
                 continue
+
+            # now it is time to get all the bounding boxes, since we are rendering in a bigger resolution compared to our input resolution,
+            # we create tiles that are used for inference, but the detected objects are stitched together again
+            # (probably requires some NMS as post-processing, but this is a future problem).
             bounding_boxes = []
             current_image = cv2.imread(image, cv2.IMREAD_UNCHANGED)
             for tile in tile_image(current_image, INPUT_WIDTH):
                 boxes = m.detect_frame(imagefile_idx, tile[2])
                 for box in boxes:
+                    # add the offset from the tiling
                     box.start_x += tile[0]
                     box.end_x += tile[0]
                     box.start_y += tile[1]
                     box.end_y += tile[1]
                     bounding_boxes.append(box)
+            # now it is time to write the bounding boxes to the disk
             bb_writer.write_boxes(target_folder, m.get_labels(), [(Path(image).stem, current_image, bounding_boxes)])
             # todo remove in future: just for testing
             # break
