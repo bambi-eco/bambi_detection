@@ -72,7 +72,7 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         "extract_frames": False, # if frames are already available from previous export, set to false
-        "project_frames": False,
+        "project_frames": True,
         "projection_method": ProjectionType.AlfsProjection,
         "detect_animals": True
     }
