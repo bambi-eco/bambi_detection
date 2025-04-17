@@ -277,7 +277,8 @@ if __name__ == '__main__':
         m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence)
         bb_writer = YoloWriter()
 
-        skip = True
+        # todo remove in future: just for testing
+        # skip = True
 
         for imagefile_idx in range(0, frame_count):
             if steps_to_do["projection_method"] == ProjectionType.AlfsProjection and imagefile_idx < alfs_number_of_neighbors:
@@ -289,11 +290,12 @@ if __name__ == '__main__':
             image_metadata = poses["images"][imagefile_idx]
             image = os.path.join(target_folder, image_metadata["imagefile"])
 
-            if image.endswith("5345-5464-5464.jpg"):
-                skip = False
-
-            if skip:
-                continue
+            # todo remove in future: just for testing
+            # if image.endswith("5345-5464-5464.jpg"):
+            #     skip = False
+            #
+            # if skip:
+            #     continue
 
             if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
                 image = image.replace(".", "_projected.")
@@ -314,6 +316,7 @@ if __name__ == '__main__':
                     box.end_y += tile[1]
                     bounding_boxes.append(box)
             bb_writer.write_boxes(target_folder, m.get_labels(), [(Path(image).stem, current_image, bounding_boxes)])
-            break
+            # todo remove in future: just for testing
+            # break
     else:
         print("3. Skipping wildlife detection")
