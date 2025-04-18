@@ -1,81 +1,35 @@
 import json
 import os
 import shutil
-import time
-from enum import Enum
 from pathlib import Path
 
 import cv2
-import numpy as np
-import torch
 from alfspy.core.geo import Transform
-from alfspy.core.rendering import CtxShot, Resolution, Renderer, RenderResultMode, TextureData
+from alfspy.core.rendering import Resolution, Renderer, RenderResultMode, TextureData
 from alfspy.core.util.geo import get_aabb
-from alfspy.core.util.pyrrs import quaternion_from_eulers
 from alfspy.render.data import BaseSettings, CameraPositioningMode
 from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, make_camera, make_shot_loader, \
     release_all
 from bambi.ai.models.ultralytics_yolo_detector import UltralyticsYoloDetector
 from bambi.ai.output.yolo_writer import YoloWriter
-from bambi.pipeline.airdata.air_data_frame import AirDataFrame
-from bambi.pipeline.domain.camera import Camera
-from bambi.pipeline.domain.drone import Drone
-from bambi.pipeline.domain.sensor import SensorResolution
-from bambi.pipeline.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
-from bambi.pipeline.webgl.timed_pose_extractor import TimedPoseExtractor
+
+from bambi.airdata.air_data_frame import AirDataFrame
+from bambi.domain.camera import Camera
+from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
+from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
+
 from pyrr import Vector3, Quaternion
 from trimesh import Trimesh
-
-def create_shot(image, image_metadata, ctx, correction):
-    position = Vector3(image_metadata["location"])
-    rotation = image_metadata["rotation"]
-    rotation = [val % 360.0 for val in rotation]
-    rot_len = len(rotation)
-    if rot_len == 3:
-        eulers = [np.deg2rad(val) for val in rotation]
-        rotation = quaternion_from_eulers(eulers, 'zyx')
-    else:
-        raise ValueError(f'Invalid rotation format of length {rot_len}: {rotation}')
-
-    fov = image_metadata["fovy"][0]
-    return CtxShot(ctx, image, position, rotation, fov, 1, correction, lazy=True)
-
-def tile_image(img, tile_size):
-    width, height, _ = img.shape
-
-    # Calculate step size for overlapping tiles
-    step_x = (width - tile_size) // 2
-    step_y = (height - tile_size) // 2
-
-    if step_x == 0 or step_y == 0:
-        return [(0, 0, img)]
-
-    # Calculate coordinates for the nine tiles
-    tiles = []
-    for y in [0, step_y, height - tile_size]:  # Top, middle, bottom rows
-        for x in [0, step_x, width - tile_size]:  # Left, middle, right columns
-            tiles.append((x, y))
-
-    result = []
-    # Create tiles and save them along with their labels
-    for idx, (x, y) in enumerate(tiles):
-        # Process image tile
-        result.append((x, y, img[y:y + tile_size, x:x + tile_size]))
-    return result
-
-class ProjectionType(Enum):
-    NoProjection = 0 # use if no projection should be applied for detection
-    OrthographicProjection = 1 # use if only orthographic projection should be applied
-    AlfsProjection = 2 # use if light field rendering should be applied
+from bambi.util.projection_util import *
 
 if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
-        "extract_frames": False, # if frames are already available from previous export, set to false
+        "extract_frames": True, # if frames are already available from previous export, set to false
         "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
         "skip_existing_projection": True, # if a projection is already available skip this individual one
-        "projection_method": ProjectionType.AlfsProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
-        "detect_animals": False # flag if wildlife detection should be executed after data preparation
+        "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
+        "detect_animals": True # flag if wildlife detection should be executed after data preparation
     }
 
     # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
