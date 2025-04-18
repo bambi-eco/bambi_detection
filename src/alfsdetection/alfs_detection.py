@@ -25,12 +25,6 @@ from bambi.pipeline.webgl.timed_pose_extractor import TimedPoseExtractor
 from pyrr import Vector3, Quaternion
 from trimesh import Trimesh
 
-
-class ProjectionType(Enum):
-    NoProjection = 0 # use if no projection should be applied for detection
-    OrthographicProjection = 1 # use if only orthographic projection should be applied
-    AlfsProjection = 2 # use if light field rendering should be applied
-
 def create_shot(image, image_metadata, ctx, correction):
     position = Vector3(image_metadata["location"])
     rotation = image_metadata["rotation"]
@@ -68,13 +62,17 @@ def tile_image(img, tile_size):
         result.append((x, y, img[y:y + tile_size, x:x + tile_size]))
     return result
 
+class ProjectionType(Enum):
+    NoProjection = 0 # use if no projection should be applied for detection
+    OrthographicProjection = 1 # use if only orthographic projection should be applied
+    AlfsProjection = 2 # use if light field rendering should be applied
 
 if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         "extract_frames": False, # if frames are already available from previous export, set to false
-        "project_frames": False, # if frames are already projected (or you don't want to project them at all), set to false
-        "projection_method": ProjectionType.NoProjection, # define the projection style that should be used
+        "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
+        "projection_method": ProjectionType.AlfsProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         "detect_animals": True # flag if wildlife detection should be executed after data preparation
     }
 
