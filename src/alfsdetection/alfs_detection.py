@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import time
 from enum import Enum
 from pathlib import Path
@@ -118,9 +119,9 @@ if __name__ == '__main__':
     #####################################################################################################################################################################
 
     # Step 1: Extract frames
-    os.makedirs(target_folder, exist_ok=True)
-
     if steps_to_do["extract_frames"]:
+        shutil.rmtree(target_folder, ignore_errors=True)
+        os.makedirs(target_folder, exist_ok=True)
         print("1. Extracting frames")
 
         # prepare all input files for the timed pose extractor
