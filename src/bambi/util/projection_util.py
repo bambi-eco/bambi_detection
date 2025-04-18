@@ -1,6 +1,7 @@
 from enum import Enum
 
 import numpy as np
+from alfspy.core.convert import pixel_to_world_coord
 from alfspy.core.rendering import CtxShot
 from alfspy.core.util.pyrrs import quaternion_from_eulers
 from pyrr import Vector3
@@ -42,6 +43,19 @@ def tile_image(img, tile_size):
         # Process image tile
         result.append((x, y, img[y:y + tile_size, x:x + tile_size]))
     return result
+
+def label_to_world_coordinates(label_coordinates, input_resolution, tri_mesh, camera):
+    pixel_xs = []
+    pixel_ys = []
+    for pixel_id, pixel in enumerate(label_coordinates):
+        if pixel_id % 2 == 0:
+            pixel_xs.append(int(float(pixel)))
+        else:
+            pixel_ys.append(int(float(pixel)))
+
+    w_poses = pixel_to_world_coord(pixel_xs, pixel_ys, input_resolution.width, input_resolution.height, tri_mesh, camera,
+                                   include_misses=False)
+    return w_poses
 
 class ProjectionType(Enum):
     NoProjection = 0 # use if no projection should be applied for detection

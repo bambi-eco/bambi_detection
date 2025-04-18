@@ -27,3 +27,10 @@ So make sure these models are available as environment variable (c.f. repository
 
 Use the provided 'bambi_detection.py' script and provide the required input data.
 Afterwards just hit run ;)
+
+## Known Issues
+
+We are using `GLTFLib` for reading the digital elevation models and are converting it to a mesh using `Trimesh`.
+However, sometimes the `Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)` constructor raises an `IndexError`, when building up this mesh.
+Unfortunately, we don't know what is the reason for this and it is non-deterministic.
+When running the script multiple times with the exact same input, this error occurs sometimes, but not always.
