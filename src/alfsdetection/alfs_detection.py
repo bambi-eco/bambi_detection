@@ -73,7 +73,7 @@ if __name__ == '__main__':
         "extract_frames": False, # if frames are already available from previous export, set to false
         "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
         "projection_method": ProjectionType.AlfsProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
-        "detect_animals": True # flag if wildlife detection should be executed after data preparation
+        "detect_animals": False # flag if wildlife detection should be executed after data preparation
     }
 
     # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
@@ -174,14 +174,14 @@ if __name__ == '__main__':
         texture_data = None
         tri_mesh = None
         try:
-            # load digital elevation model
             time.sleep(5) # whyever but needed for trimesh and gltf loading
+            # initialize the ModernGL context
+            ctx = make_mgl_context()
+
+            # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
-
-            # initialize the ModernGL context
-            ctx = make_mgl_context()
             mesh_aabb = get_aabb(mesh_data.vertices)
 
             # prepare the mask file
@@ -197,9 +197,15 @@ if __name__ == '__main__':
                 ortho_size=(ORTHO_WIDTH, ORTHO_HEIGHT), correction=correction, resolution=render_resolution
             )
 
+            alfs_rendering = steps_to_do["projection_method"] == ProjectionType.AlfsProjection
+
+            start_idx = alfs_number_of_neighbors if alfs_rendering else 0
+            total_indices = frame_count - start_idx
+            number_of_renderings = (total_indices + (sample_rate - 1)) // sample_rate
+            cnt = 1
             # now it is time to project the video frames
             for imagefile_idx in range(0, frame_count):
-                if steps_to_do["projection_method"] == ProjectionType.AlfsProjection and imagefile_idx < alfs_number_of_neighbors:
+                if alfs_rendering and imagefile_idx < alfs_number_of_neighbors:
                     # skip the first x frames if ALFS should be applied since there is no "negative neighborhood" only positive people around ;)
                     continue
 
@@ -210,7 +216,8 @@ if __name__ == '__main__':
                 # get the image related information from the poses file
                 image_metadata = poses["images"][imagefile_idx]
                 image = os.path.join(target_folder, image_metadata["imagefile"])
-                print(f"Rendering image {image}")
+                print(f"{cnt} / {number_of_renderings}: Rendering image {image}")
+                cnt += 1
                 if not os.path.exists(image):
                     # if source image is for whatever reason not available skip it
                     print(f"Input image not available. Skip it. {image}")
@@ -241,7 +248,7 @@ if __name__ == '__main__':
                     renderer = Renderer(settings.resolution, ctx, single_shot_camera, mesh_data, texture_data)
 
                     # now it is time to render our orthographic projections or light fields
-                    if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
+                    if not alfs_rendering:
                         # we only want to render one image, so not too much to do
                         shot_loader = make_shot_loader([shot])
                         save_name = image.replace(".", "_projected.")
@@ -257,7 +264,7 @@ if __name__ == '__main__':
                             save_name_iter=iter([save_name])
                         )
                         print(f"Rendered: {save_name}")
-                    elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
+                    else:
                         # for light fields we also have to get the neighboring frames before and after our central image
                         shots_before = []
                         shots_after = []
