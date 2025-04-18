@@ -72,6 +72,7 @@ if __name__ == '__main__':
     steps_to_do = {
         "extract_frames": False, # if frames are already available from previous export, set to false
         "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
+        "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.AlfsProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         "detect_animals": False # flag if wildlife detection should be executed after data preparation
     }
@@ -174,7 +175,6 @@ if __name__ == '__main__':
         texture_data = None
         tri_mesh = None
         try:
-            time.sleep(5) # whyever but needed for trimesh and gltf loading
             # initialize the ModernGL context
             ctx = make_mgl_context()
 
@@ -223,6 +223,15 @@ if __name__ == '__main__':
                     print(f"Input image not available. Skip it. {image}")
                     continue
 
+                if not alfs_rendering:
+                    save_name = image.replace(".", "_projected.")
+                else:
+                    save_name = image.replace(".", "_alfs.")
+
+                if steps_to_do["skip_existing_projection"] and os.path.exists(save_name):
+                    print(f"Already projected. Skip it. {image}")
+                    continue
+
                 # prepare some additional variables that have to be released
                 shot = None
                 renderer = None
@@ -251,7 +260,6 @@ if __name__ == '__main__':
                     if not alfs_rendering:
                         # we only want to render one image, so not too much to do
                         shot_loader = make_shot_loader([shot])
-                        save_name = image.replace(".", "_projected.")
 
                         # time to render
                         renderer.project_shots(
@@ -284,7 +292,6 @@ if __name__ == '__main__':
 
                         # together with the neighbors it is time to render
                         shot_loader = make_shot_loader(shots_before + [shot] + shots_after)
-                        save_name = image.replace(".", "_alfs.")
                         renderer.render_integral(shot_loader,
                                                  mask=mask,
                                                  save=True,
@@ -293,10 +300,12 @@ if __name__ == '__main__':
                         print(f"Rendered: {save_name}")
                 finally:
                     # free up resources
+                    print()
                     release_all(renderer)
+                    print()
         finally:
             # free up resources
-            release_all(ctx, mask_shot)
+            release_all(ctx)
             del mesh_data
             del texture_data
             del tri_mesh
