@@ -11,6 +11,8 @@ from alfspy.orthografic_projection import get_camera_for_frame
 from alfspy.render.data import BaseSettings, CameraPositioningMode
 from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, make_camera, make_shot_loader, \
     release_all
+from pyproj.enums import TransformDirection
+
 from bambi.ai.models.ultralytics_yolo_detector import UltralyticsYoloDetector
 from bambi.ai.output.yolo_writer import YoloWriter
 
@@ -23,15 +25,16 @@ from pyproj import CRS, Transformer
 from pyrr import Quaternion
 from trimesh import Trimesh
 from bambi.util.projection_util import *
+import webcolors
 
 if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
-        "extract_frames": False, # if frames are already available from previous export, set to false
-        "project_frames": False, # if frames are already projected (or you don't want to project them at all), set to false
-        "skip_existing_projection": False, # if a projection is already available skip this individual one
+        "extract_frames": True, # if frames are already available from previous export, set to false
+        "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
+        "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
-        "detect_animals": False, # flag if wildlife detection should be executed after data preparation
+        "detect_animals": True, # flag if wildlife detection should be executed after data preparation
         "project_labels": True # flag if detected wildlife labels should be projected based on the digital elevation model
     }
 
@@ -77,17 +80,19 @@ if __name__ == '__main__':
     #####################################################################################################################################################################
     #####################################################################################################################################################################
     #####################################################################################################################################################################
-
     # Step 1: Extract frames
+    rel_transformer = Transformer.from_crs(input_crs, target_crs)
+    with open(path_to_dem_json, "r") as f:
+        dem_json = json.load(f)
+
     if steps_to_do["extract_frames"]:
         shutil.rmtree(target_folder, ignore_errors=True)
         os.makedirs(target_folder, exist_ok=True)
         print("1. Extracting frames")
 
         # prepare all input files for the timed pose extractor
-        with open(path_to_dem_json, "r") as f:
-            dem_json = json.load(f)
-            origin = dem_json["origin_wgs84"]
+
+        origin = dem_json["origin_wgs84"]
 
         ad_origin = AirDataFrame()
         ad_origin.latitude = origin["latitude"]
@@ -101,7 +106,7 @@ if __name__ == '__main__':
         accessor = CalibratedVideoFrameAccessor(calibration_res)
         extractor = TimedPoseExtractor(
             accessor,
-            rel_transformer=Transformer.from_crs(input_crs, target_crs),
+            rel_transformer=rel_transformer,
             camera_name=Camera.from_string(camera_name)
         )
 
@@ -279,10 +284,10 @@ if __name__ == '__main__':
 
     #####################################################################################################################################################################
     # 3. Do wildlife detection
+    m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence)
     if steps_to_do["detect_animals"]:
         print("3. Starting wildlife detection")
         # now the final step has arrived: the inference of our AI models, so load it in the first glance
-        m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence)
         bb_writer = YoloWriter()
 
         # todo remove in future: just for testing
@@ -346,6 +351,7 @@ if __name__ == '__main__':
     # 4. Project labels
     if steps_to_do["project_labels"] and steps_to_do["projection_method"] != ProjectionType.NoProjection:
         print("4. Projecting labels")
+        colors = webcolors.names()
         ctx = None
         mask_shot = None
         mesh_data = None
@@ -377,6 +383,7 @@ if __name__ == '__main__':
                 image_file_name = Path(image_metadata["imagefile"]).stem
                 labels_file = os.path.join(target_folder, image_file_name + ".txt")
                 labels_target_file = os.path.join(target_folder, image_file_name + ".json")
+                labels_geojson_target_file = os.path.join(target_folder, image_file_name + ".geojson")
                 if os.path.exists(labels_file):
                     print(f"Projecting labels file {image_file_name}.txt")
                     frame_labels = []
@@ -416,15 +423,48 @@ if __name__ == '__main__':
                         # project labels
                         camera = get_camera_for_frame(poses, imagefile_idx, cor_rotation_eulers, cor_translation)
                         projected_labels = []
+                        points = []
                         for class_id, poly_coords in frame_labels:
+                            class_name = m._labels[class_id]
                             world_coordinates = label_to_world_coordinates(poly_coords, input_resolution, tri_mesh, camera)
-                            projected_labels.append({"Class_id": class_id, "Coordinates": world_coordinates.tolist()})
+                            x_offset = dem_json["origin"][0]
+                            y_offset = dem_json["origin"][1]
+                            z_offset = dem_json["origin"][2]
+
+                            xx = world_coordinates[:,0] + x_offset
+                            yy = world_coordinates[:,1] + y_offset
+                            zz = world_coordinates[:,2] + z_offset
+                            transformed = rel_transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
+                            gps = list(zip(*transformed))
+                            points.append({
+                                "type": "Feature",
+                                "properties": {
+                                    "title": class_name,
+                                    "className": class_name,
+                                    "marker-color": webcolors.name_to_hex(colors[class_id]),
+                                    "frameIdx": imagefile_idx
+                                },
+                                "geometry": {
+                                    "coordinates": [np.average(transformed[1]), np.average(transformed[0])],
+                                    "type": "Point"
+                                }
+                            })
+                            projected_labels.append({"Class": class_name,
+                                                     "DemCoordinates": world_coordinates.tolist(),
+                                                     "WGS84Coordinates": gps})
 
                         with open(labels_target_file, "w") as f:
                             json.dump({
                                 "Labels": projected_labels,
                                 "EPSG": target_crs.srs
                             }, f)
+
+                        with open(labels_geojson_target_file, "w") as f:
+                            geo_json = {
+                                "type": "FeatureCollection",
+                                "features": points
+                            }
+                            json.dump(geo_json, f)
 
         finally:
             # free up resources

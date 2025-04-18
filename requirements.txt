@@ -16,3 +16,4 @@ rasterio>=1.2.10
 moviepy==1.0.3
 pandas~=2.0.3
 gltflib==1.0.13
+webcolors==24.11.1
