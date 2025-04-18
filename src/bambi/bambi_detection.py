@@ -435,7 +435,6 @@ if __name__ == '__main__':
                             yy = world_coordinates[:,1] + y_offset
                             zz = world_coordinates[:,2] + z_offset
                             transformed = rel_transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
-                            gps = list(zip(*transformed))
                             points.append({
                                 "type": "Feature",
                                 "properties": {
@@ -445,13 +444,15 @@ if __name__ == '__main__':
                                     "frameIdx": imagefile_idx
                                 },
                                 "geometry": {
-                                    "coordinates": [np.average(transformed[1]), np.average(transformed[0])],
-                                    "type": "Point"
-                                }
+                                    "type": "Polygon",
+                                    "coordinates": [
+                                      list(zip(transformed[1], transformed[0])) + [[transformed[1][0], transformed[0][0]]]
+                                    ]
+                                  }
                             })
                             projected_labels.append({"Class": class_name,
                                                      "DemCoordinates": world_coordinates.tolist(),
-                                                     "WGS84Coordinates": gps})
+                                                     "WGS84Coordinates": list(zip(transformed[1], transformed[0], transformed[2]))})
 
                         with open(labels_target_file, "w") as f:
                             json.dump({
