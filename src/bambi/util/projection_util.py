@@ -63,98 +63,6 @@ def label_to_world_coordinates(label_coordinates, input_resolution, tri_mesh, ca
                                    include_misses=False)
     return w_poses
 
-def compute_visible_face_mask(mesh: trimesh.Trimesh,
-                              mask: np.ndarray,
-                              K: np.ndarray,
-                              cam_ext: np.ndarray) -> np.ndarray:
-    """
-    Returns a boolean array of shape (n_faces,), True if that face
-    is both under 'mask' when viewed through (K, cam_ext) and visible.
-    """
-    F = len(mesh.faces)
-    centroids = mesh.triangles_center          # (F,3)
-    cam_center = cam_ext[:3, 3]
-    R_wc = cam_ext[:3,:3]; R_cw = R_wc.T; t_cw = -R_cw @ cam_center
-
-    # project centroids
-    pts_cam = (R_cw @ centroids.T).T + t_cw
-    uvw     = (K @ pts_cam.T).T
-    uv      = uvw[:, :2] / uvw[:, 2:3]
-    u_i     = np.round(uv[:,0]).astype(int)
-    v_i     = np.round(uv[:,1]).astype(int)
-
-    # mask check
-    H, W = mask.shape
-    inb = (u_i>=0)&(u_i<W)&(v_i>=0)&(v_i<H)
-    white = np.zeros(F, bool)
-    white[inb] = (mask[v_i[inb], u_i[inb]] > 0)
-    candidates = np.nonzero(white)[0]
-    if len(candidates) == 0:
-        return np.zeros(F, bool)
-
-    # occlusion test
-    dirs = centroids[candidates] - cam_center
-    dirs = dirs / np.linalg.norm(dirs, axis=1, keepdims=True)
-    hits = mesh.ray.intersects_first(
-        ray_origins    = np.tile(cam_center, (len(candidates),1)),
-        ray_directions = dirs
-    )
-    visible = np.zeros(F, bool)
-    # keep those where first‐hit == face‐index
-    hit_mask = (hits == candidates)
-    visible[candidates[hit_mask]] = True
-
-    return visible
-
-
-def combined_region_properties(mesh: trimesh.Trimesh,
-                               mask: np.ndarray,
-                               K: np.ndarray,
-                               cam_exts: list):
-    """
-    masks, Ks, cam_exts must be same length.
-    Returns:
-      area      : float = summed surface area of unioned visible faces
-      perimeter : float = total boundary length of that union
-      loops_xyz : list of (Ni,3) arrays = 3D loops around the union
-    """
-    mask = mask[:,:,0]
-    # 1) build combined face‐mask
-    F = len(mesh.faces)
-    combined_mask = np.zeros(F, bool)
-    for ext in cam_exts:
-        combined_mask |= compute_visible_face_mask(mesh, mask, K, ext)
-
-    # assume `combined_mask` is your boolean array over mesh.faces
-    face_indices = np.nonzero(combined_mask)[0]
-
-    # 1) extract the submesh containing *only* those faces
-    #    `append=True` will re‑index vertices so they're contiguous
-    submesh = mesh.submesh([face_indices], append=True)
-
-    # 2) true surface area
-    area = submesh.area
-
-    # 3) calculate perimeter
-    path3d = submesh.outline()  # Path3D object
-
-    # 4) each `path3d` may contain one or more discrete loops;
-    #    `.discrete` returns a list of (N,3) arrays in order
-    loops_xyz = path3d.discrete
-
-    # 5) compute the perimeter of each loop, then pick the outermost
-    perimeters = []
-    for loop in loops_xyz:
-        # ensure closed
-        if not np.allclose(loop[0], loop[-1]):
-            loop = np.vstack((loop, loop[0]))
-        # sum segment lengths
-        segs = loop[1:] - loop[:-1]
-        perimeters.append(np.linalg.norm(segs, axis=1).sum())
-    perimeter = sum(perimeters)
-    return area, perimeter, submesh
-
-
 def get_mask_contour_pixels(mask_image):
     mask_image = mask_image[:,:, 0]
     mask_image = mask_image.astype(np.uint8)
@@ -169,7 +77,6 @@ def get_mask_contour_pixels(mask_image):
             x, y = point[0]
             contour_pixels.append((x, y))
     return contour_pixels
-
 
 def generate_rays(intrinsic, extrinsic, pixels):
     K_inv = np.linalg.inv(intrinsic)
@@ -223,6 +130,7 @@ def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset
                 yy.append(p[1] + y_offset)
                 zz.append(p[2] + z_offset)
                 coordinates.append((p[0] + x_offset, p[1] + y_offset))
+            # todo transform coordinates in the end and export geojson
             # transformed = transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
             # for t in [x for x in zip(transformed[0], transformed[1])]:
             #     coordinates.append((t[1], t[0]))
@@ -232,14 +140,14 @@ def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset
                 polygon = Polygon(coordinates)
                 import matplotlib.pyplot as plt
 
-                x, y = polygon.exterior.xy
-                plt.plot(x, y)
-                plt.show()
-                polygons.append(polygon)
-                # if polygon.is_valid:
-                #     polygons.append(polygon)
-                # else:
-                #     print(f"Invalid polygon at frame {i}")
+                # x, y = polygon.exterior.xy
+                # plt.plot(x, y)
+                # plt.show()
+                # TODO check why polygon coordinates are not ordered
+                if polygon.is_valid:
+                    polygons.append(polygon)
+                else:
+                    print(f"Invalid polygon at frame {i}")
             except Exception as e:
                 print(f"Failed to create polygon at frame {i}: {e}")
 
