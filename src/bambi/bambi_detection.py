@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -30,12 +31,13 @@ import webcolors
 if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
-        "extract_frames": True, # if frames are already available from previous export, set to false
-        "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
-        "skip_existing_projection": True, # if a projection is already available skip this individual one
+        "extract_frames": False, # if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
+        "project_frames": False, # if frames are already projected (or you don't want to project them at all), set to false
+        "skip_existing_projection": False, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
-        "detect_animals": True, # flag if wildlife detection should be executed after data preparation
-        "project_labels": True # flag if detected wildlife labels should be projected based on the digital elevation model
+        "detect_animals": False, # flag if wildlife detection should be executed after data preparation
+        "project_labels": False, # flag if detected wildlife labels should be projected based on the digital elevation model
+        "export_flight_data": True  # if flight relevant data should be exported like the route and the monitored area
     }
 
     # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
@@ -84,6 +86,9 @@ if __name__ == '__main__':
     rel_transformer = Transformer.from_crs(input_crs, target_crs)
     with open(path_to_dem_json, "r") as f:
         dem_json = json.load(f)
+    x_offset = dem_json["origin"][0]
+    y_offset = dem_json["origin"][1]
+    z_offset = dem_json["origin"][2]
 
     if steps_to_do["extract_frames"]:
         shutil.rmtree(target_folder, ignore_errors=True)
@@ -149,11 +154,15 @@ if __name__ == '__main__':
     total_indices = frame_count - start_idx
     number_of_renderings = (total_indices + (sample_rate - 1)) // sample_rate
 
+    mask_shot = CtxShot._cvt_img(
+        cv2.imread(os.path.join(target_folder, f"mask_{camera_name}.png"), cv2.IMREAD_UNCHANGED))
+
+    mask_height, mask_width, _ = mask_shot.shape
+
     if steps_to_do["project_frames"] and steps_to_do["projection_method"] != ProjectionType.NoProjection:
         print("2. Starting projection")
         # prepare some variables for later releasing resources
         ctx = None
-        mask_shot = None
         mesh_data = None
         texture_data = None
         tri_mesh = None
@@ -168,7 +177,6 @@ if __name__ == '__main__':
             mesh_aabb = get_aabb(mesh_data.vertices)
 
             # prepare the mask file
-            mask_shot = CtxShot._cvt_img(cv2.imread(os.path.join(target_folder, f"mask_{camera_name}.png"), cv2.IMREAD_UNCHANGED))
             mask = TextureData(mask_shot)
 
 
@@ -353,7 +361,6 @@ if __name__ == '__main__':
         print("4. Projecting labels")
         colors = webcolors.names()
         ctx = None
-        mask_shot = None
         mesh_data = None
         texture_data = None
         tri_mesh = None
@@ -427,9 +434,7 @@ if __name__ == '__main__':
                         for class_id, poly_coords in frame_labels:
                             class_name = m._labels[class_id]
                             world_coordinates = label_to_world_coordinates(poly_coords, input_resolution, tri_mesh, camera)
-                            x_offset = dem_json["origin"][0]
-                            y_offset = dem_json["origin"][1]
-                            z_offset = dem_json["origin"][2]
+
 
                             xx = world_coordinates[:,0] + x_offset
                             yy = world_coordinates[:,1] + y_offset
@@ -475,3 +480,90 @@ if __name__ == '__main__':
             del tri_mesh
     else:
         print("4. Skipping label projection")
+
+    #####################################################################################################################################################################
+    # 5. Export of flight data
+    def get_extrinsics_from_image_metdata(image_metadata):
+        rotation = image_metadata["rotation"]
+        rotation = [val % 360.0 for val in rotation]
+        rot_len = len(rotation)
+        if rot_len == 3:
+            eulers = [np.deg2rad(val) for val in rotation]
+        else:
+            raise ValueError(f'Invalid rotation format of length {rot_len}: {rotation}')
+        R_mat, _ = cv2.Rodrigues(np.array(eulers))
+
+        # build 4×4 extrinsics
+        extrinsic = np.eye(4, dtype=float)
+        extrinsic[:3, :3] = R_mat
+        extrinsic[:3, 3] = np.array(image_metadata["location"])
+        return extrinsic
+
+    if steps_to_do["export_flight_data"]:
+        print("5. Export of flight data (route and monitored area)")
+        ctx = None
+        mesh_data = None
+        texture_data = None
+        tri_mesh = None
+        try:
+            # load digital elevation model
+            mesh_data, texture_data = read_gltf(path_to_dem)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
+            tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+
+            # now it is time to project the video frames
+            cnt = 1
+
+            extrinsics = []
+            for imagefile_idx in range(0, frame_count):
+                if alfs_rendering and imagefile_idx < alfs_number_of_neighbors:
+                    # skip the first x frames if ALFS should be applied since there is no "negative neighborhood" only positive people around ;)
+                    continue
+
+                if imagefile_idx % sample_rate != 0:
+                    # skip some frames based on the sampling rate
+                    continue
+
+                image_metadata = poses["images"][imagefile_idx]
+                image = os.path.join(target_folder, image_metadata["imagefile"])
+                cnt += 1
+                if not os.path.exists(image):
+                    # if source image is for whatever reason not available skip it
+                    print(f"Input image not available. Skip it. {image}")
+                    continue
+
+                extrinsics.append(get_extrinsics_from_image_metdata(image_metadata))
+                if alfs_rendering:
+                    shots_before = []
+                    shots_after = []
+                    for image_before_idx in range(0, alfs_number_of_neighbors):
+                        if image_before_idx % alfs_neighbor_sample_rate == 0:
+                            idx = imagefile_idx - alfs_number_of_neighbors + image_before_idx
+                            image_before_metadata = poses["images"][idx]
+                            extrinsics.append(get_extrinsics_from_image_metdata(image_before_metadata))
+
+                    for image_after_idx in range(1, alfs_number_of_neighbors + 1):
+                        if image_after_idx % alfs_neighbor_sample_rate == 0:
+                            idx = imagefile_idx + image_after_idx
+                            image_after_metadata = poses["images"][idx]
+                            extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata))
+                if cnt == 50:
+                    break
+
+
+            fov_y = poses["images"][0]["fovy"][0]
+            fy = (mask_height / 2) / np.tan(math.radians(fov_y) / 2)
+            fx = fy  # if square pixels, else compute from fov_x
+            cx = mask_width / 2
+            cy = mask_height / 2
+            intrinsics = np.array([[fx, 0, cx],
+                                                                            [0, fy, cy],
+                                                                            [0, 0, 1]])
+            # res = measure_area(tri_mesh, mask_shot, intrinsics, extrinsics)
+            res = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4)
+        finally:
+            del mesh_data
+            del texture_data
+            del tri_mesh
+    else:
+        print("5. Skipping export of flight data")
