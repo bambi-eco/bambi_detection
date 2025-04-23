@@ -412,6 +412,7 @@ if __name__ == '__main__':
                     frame_labels = []
                     with open(labels_file, 'r') as f:
                         for line in f:
+                            # Get the yolo based labels
                             values = line.strip().split()
                             if len(values) == 5:
                                 class_id = int(values[0])
@@ -451,7 +452,7 @@ if __name__ == '__main__':
                             class_name = m._labels[class_id]
                             world_coordinates = label_to_world_coordinates(poly_coords, input_resolution, tri_mesh, camera)
 
-
+                            # transform the labels to WGS84 coordinates and export it as GeoJSON
                             xx = world_coordinates[:,0] + x_offset
                             yy = world_coordinates[:,1] + y_offset
                             zz = world_coordinates[:,2] + z_offset
@@ -550,10 +551,10 @@ if __name__ == '__main__':
                     print(f"Input image not available. Skip it. {image}")
                     continue
 
+                # get the extrinsics of the central frame
                 extrinsics.append(get_extrinsics_from_image_metdata(image_metadata))
                 if alfs_rendering:
-                    shots_before = []
-                    shots_after = []
+                    # get the extrinsics for neighboring frames
                     for image_before_idx in range(0, alfs_number_of_neighbors):
                         if image_before_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx - alfs_number_of_neighbors + image_before_idx
@@ -566,13 +567,18 @@ if __name__ == '__main__':
                             image_after_metadata = poses["images"][idx]
                             extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata))
 
+            # prepare the camera intrinsics
             fov_y = poses["images"][0]["fovy"][0]
             fy = (mask_height / 2) / np.tan(math.radians(fov_y) / 2)
             cx = mask_width / 2
             cy = mask_height / 2
             intrinsics = np.array([[fy, 0, cx], [0, fy, cy], [0, 0, 1]])
+
+            # do the calculation
             area, perimeter, final_coordinates = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4)
             print(f"Observed area: {area} m² with a perimeter of {perimeter}m")
+
+            # export the flight route based on the poses.json
             with open(os.path.join(target_folder, f"route.json"), "w") as f:
                 json.dump({
                       "type": "FeatureCollection",
@@ -588,6 +594,7 @@ if __name__ == '__main__':
                       ]
                   }, f)
 
+            # export the projected area and at the measurments as metadata
             with open(os.path.join(target_folder, f"area.json"), "w") as f:
                 json.dump({
                                 "type": "FeatureCollection",
