@@ -31,12 +31,12 @@ import webcolors
 if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
-        "extract_frames": False, # if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "project_frames": False, # if frames are already projected (or you don't want to project them at all), set to false
-        "skip_existing_projection": False, # if a projection is already available skip this individual one
+        "extract_frames": True, # if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
+        "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
+        "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
-        "detect_animals": False, # flag if wildlife detection should be executed after data preparation
-        "project_labels": False, # flag if detected wildlife labels should be projected based on the digital elevation model
+        "detect_animals": True, # flag if wildlife detection should be executed after data preparation
+        "project_labels": True, # flag if detected wildlife labels should be projected based on the digital elevation model
         "export_flight_data": True  # if flight relevant data should be exported like the route and the monitored area
     }
 
@@ -514,6 +514,7 @@ if __name__ == '__main__':
             # now it is time to project the video frames
             cnt = 1
 
+            route = []
             extrinsics = []
             for imagefile_idx in range(0, frame_count):
                 if alfs_rendering and imagefile_idx < alfs_number_of_neighbors:
@@ -526,6 +527,7 @@ if __name__ == '__main__':
 
                 image_metadata = poses["images"][imagefile_idx]
                 image = os.path.join(target_folder, image_metadata["imagefile"])
+                route.append((image_metadata["lng"], image_metadata["lat"]))
                 cnt += 1
                 if not os.path.exists(image):
                     # if source image is for whatever reason not available skip it
@@ -547,20 +549,50 @@ if __name__ == '__main__':
                             idx = imagefile_idx + image_after_idx
                             image_after_metadata = poses["images"][idx]
                             extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata))
-                if cnt == 50:
-                    break
-
 
             fov_y = poses["images"][0]["fovy"][0]
             fy = (mask_height / 2) / np.tan(math.radians(fov_y) / 2)
-            fx = fy  # if square pixels, else compute from fov_x
             cx = mask_width / 2
             cy = mask_height / 2
-            intrinsics = np.array([[fx, 0, cx],
-                                                                            [0, fy, cy],
-                                                                            [0, 0, 1]])
-            # res = measure_area(tri_mesh, mask_shot, intrinsics, extrinsics)
-            res = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4)
+            intrinsics = np.array([[fy, 0, cx], [0, fy, cy], [0, 0, 1]])
+            area, perimeter, final_coordinates = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4)
+            print(f"Observed area: {area} m² with a perimeter of {perimeter}m")
+            with open(os.path.join(target_folder, f"route.json"), "w") as f:
+                json.dump({
+                      "type": "FeatureCollection",
+                      "features": [
+                          {
+                              "type": "Feature",
+                              "geometry": {
+                                  "type": "LineString",
+                                  "coordinates": route
+                              },
+                              "properties": {}
+                          }
+                      ]
+                  }, f)
+
+            with open(os.path.join(target_folder, f"area.json"), "w") as f:
+                json.dump({
+                                "type": "FeatureCollection",
+                                "features": [
+                                    {
+                                        "type": "Feature",
+                                        "properties": {
+                                            "area": area,
+                                            "perimeter": perimeter,
+                                            "marker-color": "#ff0000"
+                                        },
+                                        "geometry": {
+                                            "type": "Polygon",
+                                            "coordinates": [
+                                                final_coordinates
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }, f)
+
         finally:
             del mesh_data
             del texture_data

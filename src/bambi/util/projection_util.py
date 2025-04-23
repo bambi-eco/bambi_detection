@@ -12,6 +12,8 @@ from pyrr import Vector3
 from shapely.geometry.multipolygon import MultiPolygon
 from shapely.ops import unary_union
 from shapely.geometry import Polygon
+import matplotlib.pyplot as plt
+
 
 def create_shot(image, image_metadata, ctx, correction):
     position = Vector3(image_metadata["location"])
@@ -63,20 +65,33 @@ def label_to_world_coordinates(label_coordinates, input_resolution, tri_mesh, ca
                                    include_misses=False)
     return w_poses
 
-def get_mask_contour_pixels(mask_image):
+def get_sorted_mask_contour_pixels(mask_image):
     mask_image = mask_image[:,:, 0]
     mask_image = mask_image.astype(np.uint8)
     contours, _ = cv2.findContours(mask_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return []
 
-    # Flatten all contour points into a list of (x, y)
-    contour_pixels = []
-    for contour in contours:
-        for point in contour:
-            x, y = point[0]
-            contour_pixels.append((x, y))
-    return contour_pixels
+    if len(contours) != 1:
+        raise ValueError(f'Found {len(contours)} contours in mask image')
+
+    return sort_contour_clockwise(contours[0])
+
+def sort_contour_clockwise(contour):
+    # Calculate centroid
+    M = cv2.moments(contour)
+    if M['m00'] == 0:
+        return contour
+    cx = int(M['m10'] / M['m00'])
+    cy = int(M['m01'] / M['m00'])
+
+    # Sort points by angle
+    def angle_from_centroid(point):
+        x, y = point[0]
+        return np.arctan2(y - cy, x - cx)
+
+    sorted_contour = sorted(contour, key=angle_from_centroid)
+    return np.squeeze(np.array(sorted_contour), axis=1)
 
 def generate_rays(intrinsic, extrinsic, pixels):
     K_inv = np.linalg.inv(intrinsic)
@@ -101,15 +116,11 @@ def generate_rays(intrinsic, extrinsic, pixels):
 def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset, y_offset, z_offset, chunk_size=4):
     polygons = []
     points3D = []
-    contour_pixels = get_mask_contour_pixels(mask)
+    contour_pixels = get_sorted_mask_contour_pixels(mask)
+
     for i, extrinsic in enumerate(extrinsics):
         origins, directions = generate_rays(intrinsic_matrix, extrinsic, contour_pixels)
         directions *= -1
-        # ray_lines = [trimesh.load_path([origin, origin + direction * 10]) for origin, direction in
-        #              zip(origins, directions)]
-        # scene = trimesh.Scene([mesh] + ray_lines)
-        # scene.show()
-
         # Raycast using trimesh
         locations, index_ray, _ = mesh.ray.intersects_location(
             ray_origins=origins,
@@ -117,33 +128,18 @@ def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset
             multiple_hits=False
         )
 
-        valid_points = locations.tolist()
-        points3D.extend(valid_points)
+        sorted_indices = sorted(range(len(index_ray)), key=lambda k: index_ray[k])
 
-        if len(valid_points) >= 3:
+        # Reorder both lists
+        sorted_locations = [locations[i] for i in sorted_indices]
+        points3D.extend(sorted_locations)
+
+        if len(sorted_locations) >= 3:
             coordinates = []
-            xx = []
-            yy = []
-            zz = []
-            for p in valid_points:
-                xx.append(p[0] + x_offset)
-                yy.append(p[1] + y_offset)
-                zz.append(p[2] + z_offset)
+            for p in sorted_locations:
                 coordinates.append((p[0] + x_offset, p[1] + y_offset))
-            # todo transform coordinates in the end and export geojson
-            # transformed = transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
-            # for t in [x for x in zip(transformed[0], transformed[1])]:
-            #     coordinates.append((t[1], t[0]))
-            coordinates.append(coordinates[0])  # close polygon
-
             try:
                 polygon = Polygon(coordinates)
-                import matplotlib.pyplot as plt
-
-                # x, y = polygon.exterior.xy
-                # plt.plot(x, y)
-                # plt.show()
-                # TODO check why polygon coordinates are not ordered
                 if polygon.is_valid:
                     polygons.append(polygon)
                 else:
@@ -168,18 +164,27 @@ def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset
         polygons = next_chunk_polygons
 
     unioned_polygon = polygons[0]
-
     if isinstance(unioned_polygon, MultiPolygon):
         final_coordinates = list(unioned_polygon.geoms[0].exterior.coords)
-        print("Area Measurement: MultiPolygon detected, using first polygon for outline only!")
     else:
         final_coordinates = list(unioned_polygon.exterior.coords)
+
+    gps_coordiantes = []
+    xx = []
+    yy = []
+    zz = []
+    for p in final_coordinates:
+        xx.append(p[0])
+        yy.append(p[1])
+        zz.append(0)
+    transformed = transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
+    for t in [x for x in zip(transformed[0], transformed[1])]:
+        gps_coordiantes.append((t[1], t[0]))
 
     area = unioned_polygon.area
     perimeter = unioned_polygon.length
 
-
-    return {'area': area, 'perimeter': perimeter}
+    return area, perimeter, gps_coordiantes
 
 
 class ProjectionType(Enum):
