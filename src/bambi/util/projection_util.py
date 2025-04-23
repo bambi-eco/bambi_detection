@@ -1,9 +1,7 @@
-from collections import defaultdict
 from enum import Enum
 
 import cv2
 import numpy as np
-import trimesh
 from alfspy.core.convert import pixel_to_world_coord
 from alfspy.core.rendering import CtxShot
 from alfspy.core.util.pyrrs import quaternion_from_eulers
@@ -12,7 +10,6 @@ from pyrr import Vector3
 from shapely.geometry.multipolygon import MultiPolygon
 from shapely.ops import unary_union
 from shapely.geometry import Polygon
-import matplotlib.pyplot as plt
 
 
 def create_shot(image, image_metadata, ctx, correction):

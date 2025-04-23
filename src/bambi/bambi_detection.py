@@ -4,7 +4,6 @@ import os
 import shutil
 from pathlib import Path
 
-import cv2
 from alfspy.core.geo import Transform
 from alfspy.core.rendering import Resolution, Renderer, RenderResultMode, TextureData
 from alfspy.core.util.geo import get_aabb
@@ -12,7 +11,6 @@ from alfspy.orthografic_projection import get_camera_for_frame
 from alfspy.render.data import BaseSettings, CameraPositioningMode
 from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, make_camera, make_shot_loader, \
     release_all
-from pyproj.enums import TransformDirection
 
 from bambi.ai.models.ultralytics_yolo_detector import UltralyticsYoloDetector
 from bambi.ai.output.yolo_writer import YoloWriter
