@@ -30,7 +30,10 @@ Afterwards just hit run ;)
 
 ## Known Issues
 
-We are using `GLTFLib` for reading the digital elevation models and are converting it to a mesh using `Trimesh`.
+We are using `GLTFLib` for reading the digital elevation models and are converting it to a mesh using `Trimesh` and some internal functions.
 However, sometimes the `Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)` constructor raises an `IndexError`, when building up this mesh.
 Unfortunately, we don't know what is the reason for this and it is non-deterministic.
 When running the script multiple times with the exact same input, this error occurs sometimes, but not always.
+Since the digital elevation models are loaded multiple times across the script (needed in different steps), this problem may occur at different stages.
+However, the script is designed to reuse the results from the previous stages. So, if the error occurs deactivate all previous (successful) stages and just re-run the failed stages.
+Be careful, with re-running the `extract_frames` stages, this will clean up the target folder to avoid inconsistencies between the follow up stages.
