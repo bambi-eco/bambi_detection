@@ -37,51 +37,67 @@ if __name__ == '__main__':
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         "detect_animals": True, # flag if wildlife detection should be executed after data preparation
         "project_labels": True, # flag if detected wildlife labels should be projected based on the digital elevation model
-        "export_flight_data": True  # if flight relevant data should be exported like the route and the monitored area
+        "export_flight_data": True  # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
     }
 
     # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
     # However, the videos have to be downloaded separately (see /alfs_detection/testdata/stpankraz/todo.txt)
 
     # Define input data
+    # Sorted paths to all videos of the current flight
     videos = [
         r"C:\Users\P41743\Desktop\stpankraz\DJI_20240822074151_0001_T_point0.MP4",
         r"C:\Users\P41743\Desktop\stpankraz\DJI_20240822074745_0002_T_point0.MP4"
     ]
-    srts = [srt.replace(".MP4", ".SRT") for srt in videos]
-    air_data_path = r"C:\Users\P41743\Desktop\stpankraz\air_data.csv"
-    target_folder = r"C:\Users\P41743\Desktop\stpankraz\target"
-    path_to_dem = r"C:\Users\P41743\Desktop\stpankraz\dem_mesh_r2.gltf"
-    path_to_dem_json = path_to_dem.replace(".gltf", ".json")
-    path_to_calibration = r"C:\Users\P41743\Desktop\stpankraz\T_calib.json"
-    path_to_flight_correction = r"C:\Users\P41743\Desktop\stpankraz\correction.json"
-    camera_name = "T" # Name of the camera, either T or W
 
-    input_crs = CRS.from_epsg(4326)
+    # Sorted paths to all SRT files of the current flight
+    srts = [srt.replace(".MP4", ".SRT") for srt in videos]
+
+    # Path to the AirData log of the current flight
+    air_data_path = r"C:\Users\P41743\Desktop\stpankraz\air_data.csv"
+
+    # Target folder, where all the output of defined steps is put in (is also used as input path for subsequent steps e.g. for Project_Frames after Extract_Frames)
+    target_folder = r"C:\Users\P41743\Desktop\stpankraz\target"
+
+    # Path to the GLTF based DEM file
+    path_to_dem = r"C:\Users\P41743\Desktop\stpankraz\dem_mesh_r2.gltf"
+
+    # Path to the metadata for the DEM file
+    path_to_dem_json = path_to_dem.replace(".gltf", ".json")
+
+    # Path to the file containing the camera calibration
+    path_to_calibration = r"C:\Users\P41743\Desktop\stpankraz\T_calib.json"
+
+    # Path to the file containing flight specific corrections
+    path_to_flight_correction = r"C:\Users\P41743\Desktop\stpankraz\correction.json"
+
+    # Name of the camera, either T or W
+    camera_name = "T"
+
     target_crs = CRS.from_epsg(32633) # make sure that your DEM is matching the target_crs!
 
     # Define rendering settings
-    sample_rate = 1
-    alfs_number_of_neighbors = 100
-    alfs_neighbor_sample_rate = 10
+    sample_rate = 1 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
+    alfs_number_of_neighbors = 100 # number of neighbors before, as well as after the central frame of an light field (results in a light field based on n + 1 + n images)
+    alfs_neighbor_sample_rate = 10 # sample rate of the neighbors
 
-    ORTHO_WIDTH = 70
-    ORTHO_HEIGHT = 70
-    INPUT_WIDTH = 1024
-    INPUT_HEIGHT = 1024
-    RENDER_WIDTH = 2048
-    RENDER_HEIGHT = 2048
-    ADD_BACKGROUND = False
-    FOVY = 50
-    ASPECT_RATIO = 1
+    ORTHO_WIDTH = 70 # orthographic width of the rendered image (in m)
+    ORTHO_HEIGHT = 70 # orthographic height of the rendered image (in m)
+    RENDER_WIDTH = 2048 # pixel width of the rendered image
+    RENDER_HEIGHT = 2048 # pixel height of the rendered image
+    ADD_BACKGROUND = False # flag if the texture of the DEM should be included as background to the projected image
+    FOVY = 50 # field of view of the rendering camera used for projection
+    ASPECT_RATIO = 1 # aspect ratio of the rendering camera used for projection
 
     # Define yolo model settings
-    model_name = "yolov11-20250326"
-    min_confidence = 0.5
+    model_name = "yolov11-20250326" # model that should be used for the wildlife detection
+    min_confidence = 0.5 # minimum confidence that should be considered by the model
 
     #####################################################################################################################################################################
     #####################################################################################################################################################################
     #####################################################################################################################################################################
+    input_crs = CRS.from_epsg(4326) # WGS 84 coordinates. Don't change since GeoJSON won't work with another CRS.
+
     # Step 1: Extract frames
     rel_transformer = Transformer.from_crs(input_crs, target_crs)
     with open(path_to_dem_json, "r") as f:
@@ -139,8 +155,13 @@ if __name__ == '__main__':
     cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
     correction = Transform(cor_translation, Quaternion.from_eulers(cor_rotation_eulers))
 
+    mask_shot = CtxShot._cvt_img(
+        cv2.imread(os.path.join(target_folder, f"mask_{camera_name}.png"), cv2.IMREAD_UNCHANGED))
+
+    mask_height, mask_width, _ = mask_shot.shape
+
     # prepare the camera settings
-    input_resolution = Resolution(INPUT_WIDTH, INPUT_HEIGHT)
+    input_resolution = Resolution(mask_width, mask_height)
     render_resolution = Resolution(RENDER_WIDTH, RENDER_HEIGHT)
     settings = BaseSettings(
         count=frame_count, initial_skip=0, add_background=False,
@@ -153,11 +174,6 @@ if __name__ == '__main__':
     start_idx = alfs_number_of_neighbors if alfs_rendering else 0
     total_indices = frame_count - start_idx
     number_of_renderings = (total_indices + (sample_rate - 1)) // sample_rate
-
-    mask_shot = CtxShot._cvt_img(
-        cv2.imread(os.path.join(target_folder, f"mask_{camera_name}.png"), cv2.IMREAD_UNCHANGED))
-
-    mask_height, mask_width, _ = mask_shot.shape
 
     if steps_to_do["project_frames"] and steps_to_do["projection_method"] != ProjectionType.NoProjection:
         print("2. Starting projection")
@@ -339,7 +355,7 @@ if __name__ == '__main__':
             # (probably requires some NMS as post-processing, but this is a future problem).
             bounding_boxes = []
             current_image = cv2.imread(image, cv2.IMREAD_UNCHANGED)
-            for tile in tile_image(current_image, INPUT_WIDTH):
+            for tile in tile_image(current_image, mask_width):
                 boxes = m.detect_frame(imagefile_idx, tile[2])
                 for box in boxes:
                     # add the offset from the tiling
