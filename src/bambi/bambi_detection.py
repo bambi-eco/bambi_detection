@@ -32,13 +32,18 @@ from ultralytics.utils import LOGGER as ultralyticsLogger
 if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
-        "extract_frames": True, # if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "project_frames": True, # if frames are already projected (or you don't want to project them at all), set to false
+        # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
+        "extract_frames": True,
+        # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
+        "project_frames": True,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
-        "detect_animals": True, # flag if wildlife detection should be executed after data preparation
-        "project_labels": True, # flag if detected wildlife labels should be projected based on the digital elevation model
-        "export_flight_data": True  # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
+        # Step 3: flag if wildlife detection should be executed after data preparation
+        "detect_animals": True,
+        # Step 4: flag if detected wildlife labels should be projected based on the digital elevation model
+        "project_labels": True,
+        # Step 5: # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
+        "export_flight_data": True
     }
 
     # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
@@ -433,6 +438,11 @@ if __name__ == '__main__':
                 image_metadata = poses["images"][imagefile_idx]
                 image = os.path.join(target_folder, image_metadata["imagefile"])
                 image_file_name = Path(image_metadata["imagefile"]).stem
+                if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
+                    image_file_name = image_file_name + "_projected"
+                elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
+                    image_file_name = image_file_name+ "_alfs"
+
                 labels_file = os.path.join(target_folder, image_file_name + ".txt")
                 labels_target_file = os.path.join(target_folder, image_file_name + ".json")
                 labels_geojson_target_file = os.path.join(target_folder, image_file_name + ".geojson")
