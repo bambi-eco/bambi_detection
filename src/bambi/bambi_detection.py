@@ -628,7 +628,7 @@ if __name__ == '__main__':
             print(f"Observed area: {area} m² with a perimeter of {perimeter}m")
 
             # export the flight route based on the poses.json
-            with open(os.path.join(target_folder, f"route.json"), "w") as f:
+            with open(os.path.join(target_folder, f"route.geojson"), "w") as f:
                 json.dump({
                       "type": "FeatureCollection",
                       "features": [
@@ -644,7 +644,7 @@ if __name__ == '__main__':
                   }, f)
 
             # export the projected area and at the measurments as metadata
-            with open(os.path.join(target_folder, f"area.json"), "w") as f:
+            with open(os.path.join(target_folder, f"area.geojson"), "w") as f:
                 json.dump({
                                 "type": "FeatureCollection",
                                 "features": [
