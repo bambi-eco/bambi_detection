@@ -9,7 +9,7 @@ from yaml import SafeLoader
 from ultralytics import YOLO as u_yolo
 
 ultralytics.checks()
-def get_config(model_name: str = "yolov8N-20231023"):
+def get_config(model_name: str = "yolov8N-20231023", verbose: bool = False):
     """
 
     :param model_name: the name of the model as configured in the BAMBI model config file
@@ -59,5 +59,5 @@ def get_config(model_name: str = "yolov8N-20231023"):
         labels = list(data["names"].values())
 
 
-    return model.get("datatype"), labels, weights, classes, u_yolo(weights)
+    return model.get("datatype"), labels, weights, classes, u_yolo(weights, verbose=verbose)
 

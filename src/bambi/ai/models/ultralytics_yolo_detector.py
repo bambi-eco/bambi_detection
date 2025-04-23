@@ -15,7 +15,8 @@ import numpy.typing as npt
 class UltralyticsYoloDetector(Detection):
     def __init__(self, detection_writer: BoundingBoxWriter = YoloWriter(), model_name: str = "yolov8N-20231023",
                  min_confidence: float = 0.7,
-                 frame_accessor: Optional[Callable[[str], Generator[Tuple[int, npt.NDArray[Any]], None, None]]] = None):
+                 frame_accessor: Optional[Callable[[str], Generator[Tuple[int, npt.NDArray[Any]], None, None]]] = None,
+                 verbose: bool = False):
         """
         :param model_name: the name of the model as configured in the BAMBI model config file
         :param min_confidence: Minimum confidence so a bounding box is valid
@@ -30,7 +31,7 @@ class UltralyticsYoloDetector(Detection):
         self.__model_name = model_name
         self._min_confidence = min_confidence
 
-        datatype, labels, weights, classes, model = get_config(model_name)
+        datatype, labels, weights, classes, model = get_config(model_name, verbose = verbose)
 
         self.__datatype = datatype
         self._labels = labels

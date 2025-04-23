@@ -1,7 +1,9 @@
 import json
+import logging
 import math
 import os
 import shutil
+import time
 from pathlib import Path
 
 from alfspy.core.geo import Transform
@@ -25,6 +27,7 @@ from pyrr import Quaternion
 from trimesh import Trimesh
 from bambi.util.projection_util import *
 import webcolors
+from ultralytics.utils import LOGGER as ultralyticsLogger
 
 if __name__ == '__main__':
     # Define steps to do
@@ -76,6 +79,7 @@ if __name__ == '__main__':
 
     # Define rendering settings
     sample_rate = 1 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
+    limit = -1 # number of frames that should be considered for projection, animal detection and export of flight data (if < 0 every frame is used)
     alfs_number_of_neighbors = 100 # number of neighbors before, as well as after the central frame of an light field (results in a light field based on n + 1 + n images)
     alfs_neighbor_sample_rate = 10 # sample rate of the neighbors
 
@@ -89,12 +93,15 @@ if __name__ == '__main__':
 
     # Define yolo model settings
     model_name = "yolov11-20250326" # model that should be used for the wildlife detection
+    verbose = False # flag if ultralytics should write to console
     min_confidence = 0.5 # minimum confidence that should be considered by the model
 
     #####################################################################################################################################################################
     #####################################################################################################################################################################
     #####################################################################################################################################################################
     input_crs = CRS.from_epsg(4326) # WGS 84 coordinates. Don't change since GeoJSON won't work with another CRS.
+
+    start_time = time.time()
 
     # Step 1: Extract frames
     rel_transformer = Transformer.from_crs(input_crs, target_crs)
@@ -104,6 +111,7 @@ if __name__ == '__main__':
     y_offset = dem_json["origin"][1]
     z_offset = dem_json["origin"][2]
 
+    step1_start = time.time()
     if steps_to_do["extract_frames"]:
         shutil.rmtree(target_folder, ignore_errors=True)
         os.makedirs(target_folder, exist_ok=True)
@@ -135,10 +143,13 @@ if __name__ == '__main__':
         )
     else:
         print("1. Skipping frame extraction")
+    step1_end = time.time()
+    print(f"Step 1 took {step1_end - step1_start} seconds")
 
     #####################################################################################################################################################################
 
     # Step 2: Access frames
+    step2_start = time.time()
     # get the poses file we will need it multiple times
     with open(os.path.join(target_folder, "poses.json"), "r") as f:
         poses = json.load(f)
@@ -290,6 +301,10 @@ if __name__ == '__main__':
                                                  release_shots=True,
                                                  save_name=save_name)
                         print(f"Rendered: {save_name}")
+
+                    if 0 < limit <= cnt + 1:
+                        print(f"Early break due to limit of {limit}")
+                        break
                 finally:
                     # free up resources
                     print()
@@ -303,10 +318,14 @@ if __name__ == '__main__':
             del tri_mesh
     else:
         print("2. Skipping projection")
-
+    step2_end = time.time()
+    print(f"Step 2 took {step2_end - step2_start} seconds")
     #####################################################################################################################################################################
     # 3. Do wildlife detection
-    m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence)
+    step3_start = time.time()
+    os.environ["YOLO_VERBOSE"] = "False"
+    ultralyticsLogger.setLevel(logging.WARNING)
+    m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence, verbose=verbose)
     if steps_to_do["detect_animals"]:
         print("3. Starting wildlife detection")
         # now the final step has arrived: the inference of our AI models, so load it in the first glance
@@ -315,6 +334,7 @@ if __name__ == '__main__':
         # todo remove in future: just for testing
         # skip = True
 
+        cnt = 1
         # now lets go over all images and use them for inference
         for imagefile_idx in range(0, frame_count):
             if steps_to_do[
@@ -347,7 +367,7 @@ if __name__ == '__main__':
             if not os.path.exists(image):
                 print(f"Input image not available. Skip it. {image}")
                 continue
-
+            cnt += 1
             # now it is time to get all the bounding boxes, since we are rendering in a bigger resolution compared to our input resolution,
             # we create tiles that are used for inference, but the detected objects are stitched together again
             # (probably requires some NMS as post-processing, but this is a future problem).
@@ -364,13 +384,18 @@ if __name__ == '__main__':
                     bounding_boxes.append(box)
             # now it is time to write the bounding boxes to the disk
             bb_writer.write_boxes(target_folder, m.get_labels(), [(Path(image).stem, current_image, bounding_boxes)])
+            if 0 < limit <= cnt + 1:
+                print(f"Early break due to limit of {limit}")
+                break
             # todo remove in future: just for testing
             # break
     else:
         print("3. Skipping wildlife detection")
-
+    step3_end = time.time()
+    print(f"Step 3 took {step3_end - step3_start} seconds")
     #####################################################################################################################################################################
     # 4. Project labels
+    step4_start = time.time()
     if steps_to_do["project_labels"] and steps_to_do["projection_method"] != ProjectionType.NoProjection:
         print("4. Projecting labels")
         colors = webcolors.names()
@@ -388,6 +413,7 @@ if __name__ == '__main__':
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
             mesh_aabb = get_aabb(mesh_data.vertices)
 
+            cnt = 1
             # now it is time to project the video frames
             for imagefile_idx in range(0, frame_count):
                 if alfs_rendering and imagefile_idx < alfs_number_of_neighbors:
@@ -397,6 +423,8 @@ if __name__ == '__main__':
                 if imagefile_idx % sample_rate != 0:
                     # skip some frames based on the sampling rate
                     continue
+
+                cnt += 1
 
                 # get the image related information from the poses file
                 image_metadata = poses["images"][imagefile_idx]
@@ -487,6 +515,10 @@ if __name__ == '__main__':
                             }
                             json.dump(geo_json, f)
 
+                    if 0 < limit <= cnt + 1:
+                        print(f"Early break due to limit of {limit}")
+                        break
+
         finally:
             # free up resources
             release_all(ctx)
@@ -495,7 +527,8 @@ if __name__ == '__main__':
             del tri_mesh
     else:
         print("4. Skipping label projection")
-
+    step4_end = time.time()
+    print(f"Step 4 took {step4_end - step4_start} seconds")
     #####################################################################################################################################################################
     # 5. Export of flight data
     def get_extrinsics_from_image_metdata(image_metadata):
@@ -514,6 +547,7 @@ if __name__ == '__main__':
         extrinsic[:3, 3] = np.array(image_metadata["location"])
         return extrinsic
 
+    step5_start = time.time()
     if steps_to_do["export_flight_data"]:
         print("5. Export of flight data (route and monitored area)")
         ctx = None
@@ -564,6 +598,10 @@ if __name__ == '__main__':
                             idx = imagefile_idx + image_after_idx
                             image_after_metadata = poses["images"][idx]
                             extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata))
+
+                if 0 < limit <= cnt + 1:
+                    print(f"Early break due to limit of {limit}")
+                    break
 
             # prepare the camera intrinsics
             fov_y = poses["images"][0]["fovy"][0]
@@ -620,3 +658,6 @@ if __name__ == '__main__':
             del tri_mesh
     else:
         print("5. Skipping export of flight data")
+    end_time = time.time()
+    print(f"Step 5 took {end_time - step5_start} seconds")
+    print(f"Total process finished in {end_time - start_time} seconds.")
