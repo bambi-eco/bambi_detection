@@ -78,7 +78,7 @@ if __name__ == '__main__':
     target_crs = CRS.from_epsg(32633) # make sure that your DEM is matching the target_crs!
 
     # Define rendering settings
-    sample_rate = 1 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
+    sample_rate = 10 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
     limit = -1 # number of frames that should be considered for projection, animal detection and export of flight data (if < 0 every frame is used)
     alfs_number_of_neighbors = 100 # number of neighbors before, as well as after the central frame of an light field (results in a light field based on n + 1 + n images)
     alfs_neighbor_sample_rate = 10 # sample rate of the neighbors
@@ -183,6 +183,8 @@ if __name__ == '__main__':
     start_idx = alfs_number_of_neighbors if alfs_rendering else 0
     total_indices = frame_count - start_idx
     number_of_renderings = (total_indices + (sample_rate - 1)) // sample_rate
+    if limit > 0:
+        number_of_renderings = limit
 
     if steps_to_do["project_frames"] and steps_to_do["projection_method"] != ProjectionType.NoProjection:
         print("2. Starting projection")
@@ -349,7 +351,7 @@ if __name__ == '__main__':
             # get the image related information from the poses file
             image_metadata = poses["images"][imagefile_idx]
             image = os.path.join(target_folder, image_metadata["imagefile"])
-
+            orig_image = image
             # todo remove in future: just for testing
             # if image.endswith("5345-5464-5464.jpg"):
             #     skip = False
@@ -373,6 +375,7 @@ if __name__ == '__main__':
             # (probably requires some NMS as post-processing, but this is a future problem).
             bounding_boxes = []
             current_image = cv2.imread(image, cv2.IMREAD_UNCHANGED)
+            print(f"{cnt} / {number_of_renderings}: Inference of image {image}")
             for tile in tile_image(current_image, mask_width):
                 boxes = m.detect_frame(imagefile_idx, tile[2])
                 for box in boxes:
