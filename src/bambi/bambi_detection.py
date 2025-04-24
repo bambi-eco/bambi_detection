@@ -244,10 +244,11 @@ if __name__ == '__main__':
                     print(f"Input image not available. Skip it. {image}")
                     continue
 
+                p = Path(image)
                 if not alfs_rendering:
-                    save_name = image.replace(".", "_projected.")
+                    save_name = str(p.with_name(p.stem + '_projected' + p.suffix))
                 else:
-                    save_name = image.replace(".", "_alfs.")
+                    save_name = str(p.with_name(p.stem + '_alfs' + p.suffix))
 
                 if steps_to_do["skip_existing_projection"] and os.path.exists(save_name):
                     print(f"Already projected. Skip it. {image}")
@@ -376,10 +377,11 @@ if __name__ == '__main__':
             #     continue
 
             # however if we want to use the AI models on the orthographic projections or light fields, we have to adapt the file name
+            p = Path(image)
             if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
-                image = image.replace(".", "_projected.")
+                image = str(p.with_name(p.stem + '_projected' + p.suffix))
             elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
-                image = image.replace(".", "_alfs.")
+                image = str(p.with_name(p.stem + '_alfs' + p.suffix))
 
             # if file can't be found for whatever reason, skip it
             if not os.path.exists(image):
