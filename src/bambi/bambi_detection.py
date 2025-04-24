@@ -6,9 +6,9 @@ import shutil
 import time
 from pathlib import Path
 
-import numpy as np
 from alfspy.core.geo import Transform
 from alfspy.core.rendering import Resolution, Renderer, RenderResultMode, TextureData
+from alfspy.core.util.collections import CyclicList
 from alfspy.core.util.geo import get_aabb
 from alfspy.orthografic_projection import get_camera_for_frame
 from alfspy.render.data import BaseSettings, CameraPositioningMode
@@ -89,18 +89,28 @@ if __name__ == '__main__':
     alfs_number_of_neighbors = 100 # number of neighbors before, as well as after the central frame of an light field (results in a light field based on n + 1 + n images)
     alfs_neighbor_sample_rate = 10 # sample rate of the neighbors
 
-    ORTHO_WIDTH = 70 # orthographic width of the rendered image (in m)
-    ORTHO_HEIGHT = 70 # orthographic height of the rendered image (in m)
-    RENDER_WIDTH = 2048 # pixel width of the rendered image
-    RENDER_HEIGHT = 2048 # pixel height of the rendered image
-    ADD_BACKGROUND = False # flag if the texture of the DEM should be included as background to the projected image
-    FOVY = 50 # field of view of the rendering camera used for projection
-    ASPECT_RATIO = 1 # aspect ratio of the rendering camera used for projection
+    ortho_width = 70 # orthographic width of the rendered image (in m)
+    ortho_height = 70 # orthographic height of the rendered image (in m)
+    render_width = 2048 # pixel width of the rendered image
+    render_height = 2048 # pixel height of the rendered image
+    add_background = False # flag if the texture of the DEM should be included as background to the projected image
+    fovy = 50 # field of view of the rendering camera used for projection
+    aspect_ratio = 1 # aspect ratio of the rendering camera used for projection
 
     # Define yolo model settings
     model_name = "yolov11-20250326" # model that should be used for the wildlife detection
     verbose = False # flag if ultralytics should write to console
     min_confidence = 0.5 # minimum confidence that should be considered by the model
+
+    # colors for geojson labels
+    label_colors = CyclicList((  # BGR
+        (102, 0, 255),  # '#ff0066',  #
+        (255, 102, 0),  # '#0066ff',  #
+        (0, 255, 102),  # '#66ff00',  #
+        (255, 0, 102),  # '#6600ff',  #
+        (255, 102, 0),  # '#00ff66',  #
+        (0, 102, 255),  # '#ff6600',  #
+    ))
 
     #####################################################################################################################################################################
     #####################################################################################################################################################################
@@ -177,11 +187,11 @@ if __name__ == '__main__':
 
     # prepare the camera settings
     input_resolution = Resolution(mask_width, mask_height)
-    render_resolution = Resolution(RENDER_WIDTH, RENDER_HEIGHT)
+    render_resolution = Resolution(render_width, render_height)
     settings = BaseSettings(
         count=frame_count, initial_skip=0, add_background=False,
-        camera_position_mode=CameraPositioningMode.FirstShot, fovy=FOVY, aspect_ratio=ASPECT_RATIO, orthogonal=True,
-        ortho_size=(ORTHO_WIDTH, ORTHO_HEIGHT), correction=correction, resolution=render_resolution
+        camera_position_mode=CameraPositioningMode.FirstShot, fovy=fovy, aspect_ratio=aspect_ratio, orthogonal=True,
+        ortho_size=(ortho_width, ortho_height), correction=correction, resolution=render_resolution
     )
 
     alfs_rendering = steps_to_do["projection_method"] == ProjectionType.AlfsProjection
@@ -502,9 +512,9 @@ if __name__ == '__main__':
                                 "properties": {
                                     "title": class_name,
                                     "className": class_name,
-                                    "fill": webcolors.name_to_hex(colors[class_id]),
+                                    "fill": label_colors[class_id],
                                     "fill-opacity": 0.5,
-                                    "stroke": webcolors.name_to_hex(colors[class_id]),
+                                    "stroke": label_colors[class_id],
                                     "stroke-width": 2,
                                     "stroke-opacity": 1,
                                     "frameIdx": imagefile_idx
