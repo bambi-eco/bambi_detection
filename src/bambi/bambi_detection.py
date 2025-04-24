@@ -6,6 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
+import numpy as np
 from alfspy.core.geo import Transform
 from alfspy.core.rendering import Resolution, Renderer, RenderResultMode, TextureData
 from alfspy.core.util.geo import get_aabb
@@ -33,15 +34,15 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "extract_frames": True,
+        "extract_frames": False,
         # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
-        "project_frames": True,
+        "project_frames": False,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         # Step 3: flag if wildlife detection should be executed after data preparation
-        "detect_animals": True,
+        "detect_animals": False,
         # Step 4: flag if detected wildlife labels should be projected based on the digital elevation model
-        "project_labels": True,
+        "project_labels": False,
         # Step 5: # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
         "export_flight_data": True
     }
@@ -544,7 +545,7 @@ if __name__ == '__main__':
     print(f"Step 4 took {step4_end - step4_start} seconds")
     #####################################################################################################################################################################
     # 5. Export of flight data
-    def get_extrinsics_from_image_metdata(image_metadata):
+    def get_extrinsics_from_image_metdata(image_metadata, correction):
         rotation = image_metadata["rotation"]
         rotation = [val % 360.0 for val in rotation]
         rot_len = len(rotation)
@@ -554,11 +555,25 @@ if __name__ == '__main__':
             raise ValueError(f'Invalid rotation format of length {rot_len}: {rotation}')
         R_mat, _ = cv2.Rodrigues(np.array(eulers))
 
+        # correction
+        translation_correction = correction.position
+        rotation_correction = correction.rotation
+        R_correction = rotation_correction.matrix33
+
+
         # build 4×4 extrinsics
         extrinsic = np.eye(4, dtype=float)
         extrinsic[:3, :3] = R_mat
         extrinsic[:3, 3] = np.array(image_metadata["location"])
-        return extrinsic
+
+        # correct the extrinsics
+        R_corrected = R_correction @ extrinsic[:3, :3]
+        t_corrected = extrinsic[:3, 3] + translation_correction
+
+        corrected_extrinsic = np.eye(4, dtype=float)
+        corrected_extrinsic[:3, :3] = R_corrected
+        corrected_extrinsic[:3, 3] = t_corrected
+        return corrected_extrinsic
 
     step5_start = time.time()
     if steps_to_do["export_flight_data"]:
@@ -567,6 +582,8 @@ if __name__ == '__main__':
         mesh_data = None
         texture_data = None
         tri_mesh = None
+        distance = 0
+        last_position = None
         try:
             # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
@@ -590,6 +607,10 @@ if __name__ == '__main__':
                 image_metadata = poses["images"][imagefile_idx]
                 image = os.path.join(target_folder, image_metadata["imagefile"])
                 route.append((image_metadata["lng"], image_metadata["lat"]))
+                position = np.array(image_metadata["location"])
+                if last_position is not None:
+                    distance += np.linalg.norm(position - last_position)
+                last_position = position
                 cnt += 1
                 if not os.path.exists(image):
                     # if source image is for whatever reason not available skip it
@@ -597,20 +618,20 @@ if __name__ == '__main__':
                     continue
 
                 # get the extrinsics of the central frame
-                extrinsics.append(get_extrinsics_from_image_metdata(image_metadata))
+                extrinsics.append(get_extrinsics_from_image_metdata(image_metadata, correction))
                 if alfs_rendering:
                     # get the extrinsics for neighboring frames
                     for image_before_idx in range(0, alfs_number_of_neighbors):
                         if image_before_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx - alfs_number_of_neighbors + image_before_idx
                             image_before_metadata = poses["images"][idx]
-                            extrinsics.append(get_extrinsics_from_image_metdata(image_before_metadata))
+                            extrinsics.append(get_extrinsics_from_image_metdata(image_before_metadata, correction))
 
                     for image_after_idx in range(1, alfs_number_of_neighbors + 1):
                         if image_after_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx + image_after_idx
                             image_after_metadata = poses["images"][idx]
-                            extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata))
+                            extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata, correction))
 
                 if 0 < limit <= cnt + 1:
                     print(f"Early break due to limit of {limit}")
@@ -625,7 +646,7 @@ if __name__ == '__main__':
 
             # do the calculation
             area, perimeter, final_coordinates = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4)
-            print(f"Observed area: {area} m² with a perimeter of {perimeter}m")
+            print(f"Observed area: {area} m² with a perimeter of {perimeter}m and a flight length of {distance}m.")
 
             # export the flight route based on the poses.json
             with open(os.path.join(target_folder, f"route.geojson"), "w") as f:
@@ -638,7 +659,9 @@ if __name__ == '__main__':
                                   "type": "LineString",
                                   "coordinates": route
                               },
-                              "properties": {}
+                              "properties": {
+                                  "length": distance
+                              }
                           }
                       ]
                   }, f)
