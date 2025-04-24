@@ -675,7 +675,7 @@ if __name__ == '__main__':
                               },
                               "properties": {
                                   "length": distance,
-                                  "stroke": "#ff0000",
+                                  "stroke": "#000000",
                                   "stroke-width": 2,
                                   "stroke-opacity": 1,
                               }
@@ -693,7 +693,11 @@ if __name__ == '__main__':
                                         "properties": {
                                             "area": area,
                                             "perimeter": perimeter,
-                                            "marker-color": "#ff0000"
+                                            "fill": "#ffffff",
+                                            "fill-opacity": 0.5,
+                                            "stroke": "#ffffff",
+                                            "stroke-width": 2,
+                                            "stroke-opacity": 1,
                                         },
                                         "geometry": {
                                             "type": "Polygon",
