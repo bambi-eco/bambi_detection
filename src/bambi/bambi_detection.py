@@ -635,6 +635,7 @@ if __name__ == '__main__':
                     continue
 
                 # get the extrinsics of the central frame
+                # todo instead of image_file_idx use image name!!!
                 extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_metadata, correction)))
                 if alfs_rendering:
                     # get the extrinsics for neighboring frames
@@ -642,12 +643,14 @@ if __name__ == '__main__':
                         if image_before_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx - alfs_number_of_neighbors + image_before_idx
                             image_before_metadata = poses["images"][idx]
+                            # todo instead of image_file_idx use image name!!!
                             extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_before_metadata, correction)))
 
                     for image_after_idx in range(1, alfs_number_of_neighbors + 1):
                         if image_after_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx + image_after_idx
                             image_after_metadata = poses["images"][idx]
+                            # todo instead of image_file_idx use image name!!!
                             extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_after_metadata, correction)))
 
                 if 0 < limit <= cnt + 1:
