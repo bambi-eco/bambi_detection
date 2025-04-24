@@ -34,15 +34,15 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "extract_frames": False,
+        "extract_frames": True,
         # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
-        "project_frames": False,
+        "project_frames": True,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         # Step 3: flag if wildlife detection should be executed after data preparation
-        "detect_animals": False,
+        "detect_animals": True,
         # Step 4: flag if detected wildlife labels should be projected based on the digital elevation model
-        "project_labels": False,
+        "project_labels": True,
         # Step 5: # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
         "export_flight_data": True
     }
@@ -53,30 +53,30 @@ if __name__ == '__main__':
     # Define input data
     # Sorted paths to all videos of the current flight
     videos = [
-        r"C:\Users\P41743\Desktop\stpankraz\DJI_20240822074151_0001_T_point0.MP4",
-        r"C:\Users\P41743\Desktop\stpankraz\DJI_20240822074745_0002_T_point0.MP4"
+        r"..\..\testdata\stpankraz\DJI_20240822074151_0001_T_point0.MP4",
+        r"..\..\testdata\stpankraz\DJI_20240822074745_0002_T_point0.MP4"
     ]
 
     # Sorted paths to all SRT files of the current flight
     srts = [srt.replace(".MP4", ".SRT") for srt in videos]
 
     # Path to the AirData log of the current flight
-    air_data_path = r"C:\Users\P41743\Desktop\stpankraz\air_data.csv"
+    air_data_path = r"..\..\testdata\stpankraz\air_data.csv"
 
     # Target folder, where all the output of defined steps is put in (is also used as input path for subsequent steps e.g. for Project_Frames after Extract_Frames)
-    target_folder = r"C:\Users\P41743\Desktop\stpankraz\target"
+    target_folder = r"..\..\testdata\stpankraz\target"
 
     # Path to the GLTF based DEM file
-    path_to_dem = r"C:\Users\P41743\Desktop\stpankraz\dem_mesh_r2.gltf"
+    path_to_dem = r"..\..\testdata\stpankraz\dem_mesh_r2.gltf"
 
     # Path to the metadata for the DEM file
     path_to_dem_json = path_to_dem.replace(".gltf", ".json")
 
     # Path to the file containing the camera calibration
-    path_to_calibration = r"C:\Users\P41743\Desktop\stpankraz\T_calib.json"
+    path_to_calibration = r"..\..\testdata\stpankraz\T_calib.json"
 
     # Path to the file containing flight specific corrections
-    path_to_flight_correction = r"C:\Users\P41743\Desktop\stpankraz\correction.json"
+    path_to_flight_correction = r"..\..\testdata\stpankraz\correction.json"
 
     # Name of the camera, either T or W
     camera_name = "T"
@@ -502,7 +502,11 @@ if __name__ == '__main__':
                                 "properties": {
                                     "title": class_name,
                                     "className": class_name,
-                                    "marker-color": webcolors.name_to_hex(colors[class_id]),
+                                    "fill": webcolors.name_to_hex(colors[class_id]),
+                                    "fill-opacity": 0.5,
+                                    "stroke": webcolors.name_to_hex(colors[class_id]),
+                                    "stroke-width": 2,
+                                    "stroke-opacity": 1,
                                     "frameIdx": imagefile_idx
                                 },
                                 "geometry": {
@@ -660,7 +664,10 @@ if __name__ == '__main__':
                                   "coordinates": route
                               },
                               "properties": {
-                                  "length": distance
+                                  "length": distance,
+                                  "stroke": "#ff0000",
+                                  "stroke-width": 2,
+                                  "stroke-opacity": 1,
                               }
                           }
                       ]

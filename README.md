@@ -28,6 +28,9 @@ So make sure these models are available as environment variable (c.f. repository
 Use the provided 'bambi_detection.py' script and provide the required input data.
 Afterwards just hit run ;)
 
+Note: That the script is built on stages that can be run individually. Like that some resources ares loaded and accessed multiple times (e.g. DEM or poses.json).
+For a more efficient implementation many steps could be summarized to avoid that behaviour, at the cost of some flexibility.
+
 ## Known Issues
 
 We are using `GLTFLib` for reading the digital elevation models and are converting it to a mesh using `Trimesh` and some internal functions.
