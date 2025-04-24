@@ -34,17 +34,18 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "extract_frames": True,
+        "extract_frames": False,
         # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
-        "project_frames": True,
+        "project_frames": False,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         # Step 3: flag if wildlife detection should be executed after data preparation
-        "detect_animals": True,
+        "detect_animals": False,
         # Step 4: flag if detected wildlife labels should be projected based on the digital elevation model
-        "project_labels": True,
+        "project_labels": False,
         # Step 5: # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
-        "export_flight_data": True
+        "export_flight_data": True,
+        "export_individual_polygons": True # defines if polygons of individual renderings should be exported in addition to the overall polygon
     }
 
     # St. Pankraz is available as testdata set (c.f. folder /alfs_detection/testdata/stpankraz)
@@ -634,20 +635,20 @@ if __name__ == '__main__':
                     continue
 
                 # get the extrinsics of the central frame
-                extrinsics.append(get_extrinsics_from_image_metdata(image_metadata, correction))
+                extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_metadata, correction)))
                 if alfs_rendering:
                     # get the extrinsics for neighboring frames
                     for image_before_idx in range(0, alfs_number_of_neighbors):
                         if image_before_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx - alfs_number_of_neighbors + image_before_idx
                             image_before_metadata = poses["images"][idx]
-                            extrinsics.append(get_extrinsics_from_image_metdata(image_before_metadata, correction))
+                            extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_before_metadata, correction)))
 
                     for image_after_idx in range(1, alfs_number_of_neighbors + 1):
                         if image_after_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx + image_after_idx
                             image_after_metadata = poses["images"][idx]
-                            extrinsics.append(get_extrinsics_from_image_metdata(image_after_metadata, correction))
+                            extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_after_metadata, correction)))
 
                 if 0 < limit <= cnt + 1:
                     print(f"Early break due to limit of {limit}")
@@ -661,7 +662,7 @@ if __name__ == '__main__':
             intrinsics = np.array([[fy, 0, cx], [0, fy, cy], [0, 0, 1]])
 
             # do the calculation
-            area, perimeter, final_coordinates = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4)
+            area, perimeter, final_coordinates = measure_area(tri_mesh, intrinsics, extrinsics, mask_shot, rel_transformer, x_offset, y_offset, z_offset, 4, steps_to_do["export_individual_polygons"], target_folder)
             print(f"Observed area: {area} m² with a perimeter of {perimeter}m and a flight length of {distance}m.")
 
             # export the flight route based on the poses.json

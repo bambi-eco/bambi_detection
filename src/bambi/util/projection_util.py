@@ -1,4 +1,7 @@
+import json
+import os.path
 from enum import Enum
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -110,12 +113,27 @@ def generate_rays(intrinsic, extrinsic, pixels):
 
     return np.array(rays_origin), np.array(rays_direction)
 
-def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset, y_offset, z_offset, chunk_size=4):
-    polygons = []
+def combine_polygons(polygons, chunk_size: int = 4):
+    while len(polygons) > 1:
+        next_chunk_polygons = []
+        for i in range(0, len(polygons), chunk_size):
+            chunk = polygons[i:i + chunk_size]
+            if len(chunk) == 1:
+                next_chunk_polygons.append(chunk[0])
+            else:
+                unioned = unary_union(chunk)
+                next_chunk_polygons.append(unioned)
+        polygons = next_chunk_polygons
+
+    return polygons[0]
+
+def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset, y_offset, z_offset, chunk_size:int = 4, export_individual_polygons: bool = True, target_path_for_individual_polygons: Optional[str] = None):
+    found_valid_polygons = False
+    grouped_polygons = {}
     points3D = []
     contour_pixels = get_sorted_mask_contour_pixels(mask)
 
-    for i, extrinsic in enumerate(extrinsics):
+    for i, extrinsic in extrinsics:
         origins, directions = generate_rays(intrinsic_matrix, extrinsic, contour_pixels)
         directions *= -1
         # Raycast using trimesh
@@ -136,31 +154,66 @@ def measure_area(mesh, intrinsic_matrix, extrinsics, mask, transformer, x_offset
             for p in sorted_locations:
                 coordinates.append((p[0] + x_offset, p[1] + y_offset))
             try:
+                if grouped_polygons.get(i) is None:
+                    grouped_polygons[i] = []
                 polygon = Polygon(coordinates)
                 if polygon.is_valid:
-                    polygons.append(polygon)
+                    found_valid_polygons = True
+                    grouped_polygons[i].append(polygon)
                 else:
                     print(f"Invalid polygon at frame {i}")
             except Exception as e:
                 print(f"Failed to create polygon at frame {i}: {e}")
 
-    if not polygons:
+    if not found_valid_polygons:
         print("No valid polygons created")
         return {'area': 0, 'perimeter': 0}
 
-    # Union polygons
-    while len(polygons) > 1:
-        next_chunk_polygons = []
-        for i in range(0, len(polygons), chunk_size):
-            chunk = polygons[i:i + chunk_size]
-            if len(chunk) == 1:
-                next_chunk_polygons.append(chunk[0])
-            else:
-                unioned = unary_union(chunk)
-                next_chunk_polygons.append(unioned)
-        polygons = next_chunk_polygons
+    if export_individual_polygons and target_path_for_individual_polygons is not None:
+        for group_id, polygon_group in grouped_polygons.items():
+            combined_polygon = combine_polygons(polygon_group, chunk_size)
+            local_gps_coordiantes = []
+            xx = []
+            yy = []
+            zz = []
+            for p in list(combined_polygon.exterior.coords):
+                xx.append(p[0])
+                yy.append(p[1])
+                zz.append(0)
+            transformed = transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
+            for t in [x for x in zip(transformed[0], transformed[1])]:
+                local_gps_coordiantes.append((t[1], t[0]))
+            target_path = os.path.join(target_path_for_individual_polygons, f"{group_id}_area.geojson")
+            print(f"Exporting area for frame {group_id} for {target_path}")
+            with open(target_path, "w") as f:
+                json.dump({
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "properties": {
+                                "area": combined_polygon.area,
+                                "perimeter": combined_polygon.length,
+                                "fill": "#ffffff",
+                                "fill-opacity": 0.5,
+                                "stroke": "#ffffff",
+                                "stroke-width": 2,
+                                "stroke-opacity": 1,
+                            },
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": [
+                                    local_gps_coordiantes
+                                ]
+                            }
+                        }
+                    ]
+                }, f)
 
-    unioned_polygon = polygons[0]
+    # Union polygons
+    print(f"Calculating overall area")
+    polygons = [item for sublist in grouped_polygons.values() for item in sublist]
+    unioned_polygon = combine_polygons(polygons, chunk_size)
     if isinstance(unioned_polygon, MultiPolygon):
         final_coordinates = list(unioned_polygon.geoms[0].exterior.coords)
     else:
