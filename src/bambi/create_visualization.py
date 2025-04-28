@@ -132,23 +132,28 @@ if __name__ == '__main__':
 
         # Plot the combined polygon
         fig, ax = plt.subplots(figsize=(width / map_dpi, height / map_dpi))
+        # include final area for constant scaling
+        final_area.plot(ax=ax, color='white', edgecolor='black', alpha=0, label='Area')
+        if include_base_map:
+            ctx.add_basemap(ax, crs='EPSG:4326', source=ctx.providers.Esri.WorldImagery, zoom=16)
+
+        gdf.plot(ax=ax, color='blue', edgecolor='black', alpha=0.25, label='Combined Area')
+        combined_gdf.plot(ax=ax, color='white', edgecolor='black', alpha=0.5, label='Combined Area')
+
         if len(previous_labels.geometry) > 0:
             previous_labels.plot(ax=ax, color='grey', edgecolor='black', alpha=0.2, label='Previous detections')
         if labels is not None:
             label_gdf = read_geo_json(labels, include_base_map)
-            label_gdf.plot(ax=ax, color='blue', edgecolor='black', alpha=0.5, label='Current detections')
+            label_gdf.plot(ax=ax, color='red', edgecolor='black', alpha=0.5, label='Current detections')
             previous_labels = pd.concat([previous_labels, label_gdf], ignore_index=True)
 
         # Highlight current GPS point
-        gpd.GeoDataFrame(geometry=[gps_point]).plot(ax=ax, color='yellow', markersize=10, edgecolor='black', marker='o')
+        gpd.GeoDataFrame(geometry=[gps_point]).plot(ax=ax, color='black', markersize=10, edgecolor='black', marker='o')
 
-        combined_gdf.plot(ax=ax, color='blue', edgecolor='black', alpha=0.5, label='Combined Area')
         if path_gdf is not None:
-            path_gdf.plot(ax=ax, color='green', linewidth=2, label='Path')
+            path_gdf.plot(ax=ax, color='black', linewidth=2, label='Path')
 
-        final_area.plot(ax=ax, color='white', edgecolor='black', alpha=0.1, label='Area')
-        if include_base_map:
-            ctx.add_basemap(ax, crs='EPSG:4326', source=ctx.providers.Esri.WorldImagery, zoom=16)
+
         ax.axis('off')
 
         screenshot_path = os.path.join(output_folder, f'step_{idx + 1}.png')
