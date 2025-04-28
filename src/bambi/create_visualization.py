@@ -26,7 +26,7 @@ def read_geo_json(path_to_file, include_base_map:bool = False):
 
 if __name__ == '__main__':
     # Script to create a video visualization of the monitoring process created with the bambi_detection.py script
-    # Requires at least "export_flight_data": True and "export_individual_polygons": True
+    # Requires at least "export_flight_data": True + "export_individual_polygons": True and "projection_method" != ProjectionType.NoProjection
     # May also consider projected frames based on "project_labels": True
 
     # Set paths
@@ -78,16 +78,20 @@ if __name__ == '__main__':
     starttime = time.time()
     print("Creating video frames")
     for idx, image_metadata in enumerate(poses["images"]):
-        # todo instead of image_file_idx use image name!!!
-        geojson_file = os.path.join(input_path, f"{idx}_area.geojson")
+        image = image_metadata["imagefile"]
+        image_stem = Path(image).stem
+        if alfs_rendering:
+            image_stem = image_stem + "_alfs"
+        else:
+            image_stem = image_stem + "_projected"
+
+        geojson_file_name = f"{image_stem}_area.geojson"
+        geojson_file = os.path.join(input_path, geojson_file_name)
         if not os.path.exists(geojson_file):
+            print(f"Could not find area geojson {geojson_file_name}")
             continue
         print(f"Processing image {idx}")
-        image = image_metadata["imagefile"]
-        if alfs_rendering:
-            image = Path(image).stem + "_alfs" + Path(image).suffix
-        else:
-            image = Path(image).stem + "_projected" + Path(image).suffix
+        image = image_stem + Path(image).suffix
         image_path = os.path.join(input_path, image)
 
         if not os.path.exists(image_path):
@@ -115,8 +119,9 @@ if __name__ == '__main__':
         if len(gps_points) > 1:
             path_line = LineString(gps_points)
             path_gdf = gpd.GeoDataFrame(geometry=[path_line], crs=4326)
-            if include_base_map:
-                path_gdf = path_gdf.to_crs(epsg=3857)
+            # TODO
+            # if include_base_map:
+            #     path_gdf = path_gdf.to_crs(epsg=3857)
         else:
             path_gdf = None
 
@@ -143,7 +148,7 @@ if __name__ == '__main__':
 
         final_area.plot(ax=ax, color='white', edgecolor='black', alpha=0.1, label='Area')
         if include_base_map:
-            ctx.add_basemap(ax, source=ctx.providers.Esri.WorldImagery, zoom=16)
+            ctx.add_basemap(ax, crs='EPSG:4326', source=ctx.providers.Esri.WorldImagery, zoom=16)
         ax.axis('off')
 
         screenshot_path = os.path.join(output_folder, f'step_{idx + 1}.png')

@@ -34,15 +34,16 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "extract_frames": False,
+        "extract_frames": True,
         # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
-        "project_frames": False,
+        "project_frames": True,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         # Step 3: flag if wildlife detection should be executed after data preparation
-        "detect_animals": False,
+        "detect_animals": True,
+        "skip_already_inferenced_frames": True, # flag if already inferenced frames should be skipped
         # Step 4: flag if detected wildlife labels should be projected based on the digital elevation model
-        "project_labels": False,
+        "project_labels": True,
         # Step 5: # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
         "export_flight_data": True,
         "export_individual_polygons": True # defines if polygons of individual renderings should be exported in addition to the overall polygon
@@ -85,7 +86,7 @@ if __name__ == '__main__':
     target_crs = CRS.from_epsg(32633) # make sure that your DEM is matching the target_crs!
 
     # Define rendering settings
-    sample_rate = 10 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
+    sample_rate = 1 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
     limit = -1 # number of frames that should be considered for projection, animal detection and export of flight data (if < 0 every frame is used)
     alfs_number_of_neighbors = 100 # number of neighbors before, as well as after the central frame of an light field (results in a light field based on n + 1 + n images)
     alfs_neighbor_sample_rate = 10 # sample rate of the neighbors
@@ -216,8 +217,8 @@ if __name__ == '__main__':
 
             # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
-            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             mesh_aabb = get_aabb(mesh_data.vertices)
 
             # prepare the mask file
@@ -310,7 +311,7 @@ if __name__ == '__main__':
                             if image_after_idx % alfs_neighbor_sample_rate == 0:
                                 idx = imagefile_idx + image_after_idx
                                 image_after_metadata = poses["images"][idx]
-                                image_after = os.path.join(target_folder, image_before_metadata["imagefile"])
+                                image_after = os.path.join(target_folder, image_after_metadata["imagefile"])
                                 shots_after.append(create_shot(image, image_metadata, ctx, correction))
 
                         # together with the neighbors it is time to render
@@ -351,9 +352,6 @@ if __name__ == '__main__':
         # now the final step has arrived: the inference of our AI models, so load it in the first glance
         bb_writer = YoloWriter()
 
-        # todo remove in future: just for testing
-        # skip = True
-
         cnt = 1
         # now lets go over all images and use them for inference
         for imagefile_idx in range(0, frame_count):
@@ -370,12 +368,6 @@ if __name__ == '__main__':
             image_metadata = poses["images"][imagefile_idx]
             image = os.path.join(target_folder, image_metadata["imagefile"])
             orig_image = image
-            # todo remove in future: just for testing
-            # if image.endswith("5345-5464-5464.jpg"):
-            #     skip = False
-            #
-            # if skip:
-            #     continue
 
             # however if we want to use the AI models on the orthographic projections or light fields, we have to adapt the file name
             p = Path(image)
@@ -391,10 +383,14 @@ if __name__ == '__main__':
             cnt += 1
             # now it is time to get all the bounding boxes, since we are rendering in a bigger resolution compared to our input resolution,
             # we create tiles that are used for inference, but the detected objects are stitched together again
-            # (probably requires some NMS as post-processing, but this is a future problem).
+            # (TODO probably requires some NMS as post-processing, but this is a future problem).
             bounding_boxes = []
             current_image = cv2.imread(image, cv2.IMREAD_UNCHANGED)
             print(f"{cnt} / {number_of_renderings}: Inference of image {image}")
+            if steps_to_do["skip_already_inferenced_frames"] and os.path.exists(os.path.join(target_folder, p.stem+".txt")):
+                print(f"Input image already inferenced. Skip it. {image}")
+                continue
+
             for tile in tile_image(current_image, mask_width):
                 boxes = m.detect_frame(imagefile_idx, tile[2])
                 for box in boxes:
@@ -405,12 +401,10 @@ if __name__ == '__main__':
                     box.end_y += tile[1]
                     bounding_boxes.append(box)
             # now it is time to write the bounding boxes to the disk
-            bb_writer.write_boxes(target_folder, m.get_labels(), [(Path(image).stem, current_image, bounding_boxes)])
+            bb_writer.write_boxes(target_folder, m.get_labels(), [(p.stem, current_image, bounding_boxes)])
             if 0 < limit <= cnt + 1:
                 print(f"Early break due to limit of {limit}")
                 break
-            # todo remove in future: just for testing
-            # break
     else:
         print("3. Skipping wildlife detection")
     step3_end = time.time()
@@ -431,8 +425,8 @@ if __name__ == '__main__':
 
             # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
-            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             mesh_aabb = get_aabb(mesh_data.vertices)
 
             cnt = 1
@@ -604,8 +598,8 @@ if __name__ == '__main__':
         try:
             # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
-            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
 
             # now it is time to project the video frames
             cnt = 1
@@ -622,7 +616,14 @@ if __name__ == '__main__':
                     continue
 
                 image_metadata = poses["images"][imagefile_idx]
-                image = os.path.join(target_folder, image_metadata["imagefile"])
+                imagefile = image_metadata["imagefile"]
+                image = os.path.join(target_folder, imagefile)
+                image_file_stem = Path(image).stem
+                if steps_to_do["projection_method"] == ProjectionType.OrthographicProjection:
+                    image_file_stem = image_file_stem + "_projected"
+                elif steps_to_do["projection_method"] == ProjectionType.AlfsProjection:
+                    image_file_stem = image_file_stem+ "_alfs"
+
                 route.append((image_metadata["lng"], image_metadata["lat"]))
                 position = np.array(image_metadata["location"])
                 if last_position is not None:
@@ -635,23 +636,20 @@ if __name__ == '__main__':
                     continue
 
                 # get the extrinsics of the central frame
-                # todo instead of image_file_idx use image name!!!
-                extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_metadata, correction)))
+                extrinsics.append((image_file_stem, get_extrinsics_from_image_metdata(image_metadata, correction)))
                 if alfs_rendering:
                     # get the extrinsics for neighboring frames
                     for image_before_idx in range(0, alfs_number_of_neighbors):
                         if image_before_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx - alfs_number_of_neighbors + image_before_idx
                             image_before_metadata = poses["images"][idx]
-                            # todo instead of image_file_idx use image name!!!
-                            extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_before_metadata, correction)))
+                            extrinsics.append((image_file_stem, get_extrinsics_from_image_metdata(image_before_metadata, correction)))
 
                     for image_after_idx in range(1, alfs_number_of_neighbors + 1):
                         if image_after_idx % alfs_neighbor_sample_rate == 0:
                             idx = imagefile_idx + image_after_idx
                             image_after_metadata = poses["images"][idx]
-                            # todo instead of image_file_idx use image name!!!
-                            extrinsics.append((imagefile_idx, get_extrinsics_from_image_metdata(image_after_metadata, correction)))
+                            extrinsics.append((image_file_stem, get_extrinsics_from_image_metdata(image_after_metadata, correction)))
 
                 if 0 < limit <= cnt + 1:
                     print(f"Early break due to limit of {limit}")
