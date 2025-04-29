@@ -141,10 +141,10 @@ if __name__ == '__main__':
         combined_gdf.plot(ax=ax, color='white', edgecolor='black', alpha=0.5, label='Combined Area')
 
         if len(previous_labels.geometry) > 0:
-            previous_labels.plot(ax=ax, color='grey', edgecolor='black', alpha=0.2, label='Previous detections')
+            previous_labels.plot(ax=ax, color='grey', edgecolor='black', alpha=0.2, linewidth=0, label='Previous detections')
         if labels is not None:
             label_gdf = read_geo_json(labels, include_base_map)
-            label_gdf.plot(ax=ax, color='red', edgecolor='black', alpha=0.5, label='Current detections')
+            label_gdf.plot(ax=ax, color='red', edgecolor='black', alpha=0.5, linewidth=0, label='Current detections')
             previous_labels = pd.concat([previous_labels, label_gdf], ignore_index=True)
 
         # Highlight current GPS point
@@ -177,7 +177,7 @@ if __name__ == '__main__':
                     start_y = int(box.start_y)
                     end_x = int(box.end_x)
                     end_y = int(box.end_y)
-                    cv2.rectangle(i1, (start_x, start_y), (end_x, end_y), color=(0, 0, 255), thickness=2)
+                    cv2.rectangle(i1, (start_x, start_y), (end_x, end_y), color=(255, 0, 0), thickness=2)
 
             i2 = imageio.v2.imread(screenshot)[:, :, :3]
             writer.append_data(np.hstack((i1, i2)))
