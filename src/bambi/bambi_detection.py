@@ -6,6 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
+import torch
 from alfspy.core.geo import Transform
 from alfspy.core.rendering import Resolution, Renderer, RenderResultMode, TextureData
 from alfspy.core.util.collections import CyclicList
@@ -34,9 +35,9 @@ if __name__ == '__main__':
     # Define steps to do
     steps_to_do = {
         # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
-        "extract_frames": True,
+        "extract_frames": False,
         # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
-        "project_frames": True,
+        "project_frames": False,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
         "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         # Step 3: flag if wildlife detection should be executed after data preparation
@@ -100,7 +101,7 @@ if __name__ == '__main__':
     aspect_ratio = 1 # aspect ratio of the rendering camera used for projection
 
     # Define yolo model settings
-    model_name = "yolov11-20250326" # model that should be used for the wildlife detection
+    model_name = "yolov11PerspectiveViewSingleClsRun6" # model that should be used for the wildlife detection
     verbose = False # flag if ultralytics should write to console
     min_confidence = 0.5 # minimum confidence that should be considered by the model
 
@@ -117,6 +118,7 @@ if __name__ == '__main__':
     #####################################################################################################################################################################
     #####################################################################################################################################################################
     #####################################################################################################################################################################
+    print(f"Cuda is available {torch.cuda.is_available()}")
     input_crs = CRS.from_epsg(4326) # WGS 84 coordinates. Don't change since GeoJSON won't work with another CRS.
 
     start_time = time.time()
@@ -275,9 +277,8 @@ if __name__ == '__main__':
 
                     # time to prepare the rendering
                     shot = create_shot(image, image_metadata, ctx, correction)
-                    single_shot_camera = make_camera(mesh_aabb, [shot], settings, rotation=Quaternion.from_eulers(
-                        [(eulers[0] - cor_rotation_eulers[0]), (eulers[1] - cor_rotation_eulers[1]),
-                         (eulers[2] - cor_rotation_eulers[2])]))
+                    single_shot_camera = make_camera(mesh_aabb, [shot], settings, rotation=Quaternion.from_matrix(
+                        shot.get_view().inverse @ shot.get_correction().inverse))
                     renderer = Renderer(settings.resolution, ctx, single_shot_camera, mesh_data, texture_data)
 
                     # now it is time to render our orthographic projections or light fields

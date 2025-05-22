@@ -70,6 +70,7 @@ if __name__ == '__main__':
         Line2D([0], [0], color='green', lw=2, label='Path')
     ]
 
+    # TODO create a square bounding box around the area to match the rendering resolution
     final_area = read_geo_json(os.path.join(input_path, "area.geojson"), include_base_map)
 
     width = None
