@@ -62,6 +62,12 @@ def read_bounding_boxes(file_path):
         'Class': classes
     })
 
+def check_file_row_equality(p1, p2):
+    with open(p1, 'r') as f1, open(p2, 'r') as f2:
+        lines_file1 = sum(1 for _ in f1)
+        lines_file2 = sum(1 for _ in f2)
+        return lines_file1 == lines_file2
+
 if __name__ == '__main__':
     """
     Help script allowing to convert bounding boxes from image coordinates to world coordinates as required for our tracking experiments.
@@ -97,6 +103,7 @@ if __name__ == '__main__':
 
     # go through the dataset splits of the bounding boxes and start processing
     for split in os.listdir(bounding_box_base_path):
+        print(f"Processing {split}...")
         # prepare target folder
         os.makedirs(os.path.join(target_path, split), exist_ok=True)
         # for every flight there might be multiple annotated sequences. Every sequence has got its own label file
@@ -105,8 +112,17 @@ if __name__ == '__main__':
 
         # get through the current split and get all of labels of our video sequences
         split_path = os.path.join(bounding_box_base_path, split)
-        for file_name in os.listdir(split_path):
+        files_in_split = os.listdir(split_path)
+        num_of_files_in_split = len(files_in_split)
+        for file_dix, file_name in enumerate(files_in_split):
+            print(f"{file_dix} / {num_of_files_in_split} ({split}): {file_name}...")
             file_path = os.path.join(split_path, file_name)
+            # check if the labels have not already been processed
+            target_file_path = os.path.join(target_path, split, os.path.basename(file_path))
+            if os.path.exists(target_file_path) and check_file_row_equality(file_path, target_file_path):
+                print("--- already processed. Skip.")
+                continue
+
             if os.path.isfile(file_path):
                 # read the current labels
                 df = read_bounding_boxes(file_path)
@@ -145,40 +161,52 @@ if __name__ == '__main__':
             for (file_path, df) in labels:
                 # check if the labels have not already been processed
                 target_file_path = os.path.join(target_path, split, os.path.basename(file_path))
-                if os.path.exists(target_file_path):
+                if os.path.exists(target_file_path) and check_file_row_equality(file_path, target_file_path):
+                    print("--- already processed. Skip projection.")
                     continue
 
                 # if labels have not been processed lets start
+                num_of_bb = len(df)
+                if num_of_bb == 0:
+                    print(f"---- No bounding boxes")
+
+                # convert every individual bounding box
+                to_write = []
+                for bb_idx, bb in enumerate(df.itertuples(index=False)):
+                    print(f"---- Projecting BB {bb_idx} / {num_of_bb}")
+                    # get the frame specific corrections of the location and orientation
+                    frame_id = int(bb.Frame_ID)
+                    frame_correction = get_frame_correction(corrections_data, frame_id)
+                    translation = frame_correction.get('translation', {'x': 0, 'y': 0, 'z': 0})
+                    cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
+                    rotation = frame_correction.get('rotation', {'x': 0, 'y': 0, 'z': 0})
+                    cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+
+                    # prepare the camera object
+                    camera = get_camera_for_frame(poses, frame_id, cor_rotation_eulers, cor_translation)
+
+                    # now project the current bounding box
+                    pixel_xs = [bb.X_Start, bb.X_End, bb.X_End, bb.X_Start]
+                    pixel_ys = [bb.Y_Start, bb.Y_Start, bb.Y_End, bb.Y_End]
+                    world_coordinates = pixel_to_world_coord(pixel_xs, pixel_ys, input_resolution.width,
+                                                             input_resolution.height, tri_mesh, camera,
+                                                             include_misses=False)
+
+                    # Get the result and write the projected bounding box to the target file
+                    X_Start = min(world_coordinates[:,0])
+                    X_End = max(world_coordinates[:,0])
+                    Y_Start = min(world_coordinates[:, 1])
+                    Y_End = max(world_coordinates[:, 1])
+                    to_write.append(f"{bb.Frame_ID} {X_Start} {Y_Start} {X_End} {Y_End} {bb.Confidence} {bb.Class}")
+
                 with (open(target_file_path, 'w') as target_file,
                       open(file_path) as original_file):
                     header_line = original_file.readline()
                     target_file.write(header_line)
-                    num_of_bb = len(df)
-                    # convert every individual bounding box
-                    for bb_idx, bb in enumerate(df.itertuples(index=False)):
-                        # get the frame specific corrections of the location and orientation
-                        frame_id = int(bb.Frame_ID)
-                        frame_correction = get_frame_correction(corrections_data, frame_id)
-                        translation = frame_correction.get('translation', {'x': 0, 'y': 0, 'z': 0})
-                        cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-                        rotation = frame_correction.get('rotation', {'x': 0, 'y': 0, 'z': 0})
-                        cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-
-                        # prepare the camera object
-                        camera = get_camera_for_frame(poses, frame_id, cor_rotation_eulers, cor_translation)
-
-                        # now project the current bounding box
-                        pixel_xs = [bb.X_Start, bb.X_End, bb.X_End, bb.X_Start]
-                        pixel_ys = [bb.Y_Start, bb.Y_Start, bb.Y_End, bb.Y_End]
-                        world_coordinates = pixel_to_world_coord(pixel_xs, pixel_ys, input_resolution.width,
-                                                                 input_resolution.height, tri_mesh, camera,
-                                                                 include_misses=False)
-
-                        # Get the result and write the projected bounding box to the target file
-                        X_Start = min(world_coordinates[:,0])
-                        X_End = max(world_coordinates[:,0])
-                        Y_Start = min(world_coordinates[:, 1])
-                        Y_End = max(world_coordinates[:, 1])
-                        target_file.write(f"{bb.Frame_ID} {X_Start} {Y_Start} {X_End} {Y_End} {bb.Confidence} {bb.Class}")
+                    for bb_idx, w in enumerate(to_write):
+                        target_file.write(w)
                         if bb_idx < num_of_bb - 1:
                             target_file.write("\n")
+
+                if not check_file_row_equality(file_path, target_file_path):
+                    raise ValueError(f"Error: Unequal number of lines for projection of {file_path}.")
