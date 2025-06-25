@@ -70,7 +70,8 @@ def check_file_row_equality(p1, p2):
 
 if __name__ == '__main__':
     """
-    Help script allowing to convert bounding boxes from image coordinates to world coordinates as required for our tracking experiments.
+    Help script allowing to convert bounding boxes (like https://doi.org/10.5281/zenodo.15532567) from image coordinates 
+    to world coordinates as e.g. required for our tracking experiments.
     Based on initial detection results in the format of
     
     # /sequences/test/6_1/img1
