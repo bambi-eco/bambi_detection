@@ -55,8 +55,8 @@ if __name__ == '__main__':
 
     number_of_flights = len(parent_dict)
     # Print result
-    for idx, parent, files in enumerate(parent_dict.items()):
-        print(f"Processing {parent}: {idx} / {number_of_flights}")
+    for idx, (parent, files) in enumerate(parent_dict.items()):
+        print(f"Processing flight {parent}: {idx + 1} / {number_of_flights}")
         ctx = None
         mesh_data = None
         texture_data = None
@@ -91,13 +91,17 @@ if __name__ == '__main__':
             mesh_aabb = get_aabb(mesh_data.vertices)
             number_of_files = len(files)
             for fidx, f in enumerate(files):
-                print(f"--- {fidx}/{number_of_files}")
+                print(f"--- {fidx + 1}/{number_of_files}: {f}")
                 # create target folder and files
                 p = Path(f)
                 target_folder = os.path.join(target_base, deviating_folders(base_dir, f))
                 target_file = os.path.join(target_folder, p.name)
                 if skip_existing and os.path.exists(target_file):
-                    continue
+                    with (open(f, "r", encoding="utf-8") as source,
+                          open(os.path.join(target_folder, p.name), "r", encoding="utf-8") as target):
+                        if len(source.readlines()) == len(target.readlines()):
+                            print("----- already processed")
+                            continue
                 os.makedirs(target_folder, exist_ok=True)
                 with (open(f, "r", encoding="utf-8") as source,
                       open(os.path.join(target_folder, p.name), "w", encoding="utf-8") as target):
