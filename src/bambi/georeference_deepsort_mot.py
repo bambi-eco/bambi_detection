@@ -63,6 +63,12 @@ if __name__ == '__main__':
         texture_data = None
         tri_mesh = None
         try:
+            # included = False
+            # for fidx, f in enumerate(files):
+            #     if f.endswith("26_3.txt"):
+            #         included = True
+            # if not included:
+            #     continue
             with open(os.path.join(correction_folder, f"{parent}_dem_mesh_r2.json"), "r") as f:
                 dem_meta = json.load(f)
             x_offset = dem_meta["origin"][0]

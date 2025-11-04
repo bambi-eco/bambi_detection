@@ -349,6 +349,8 @@ if __name__ == '__main__':
         length = len(files)
         for file_idx, file in enumerate(files):
             if file.endswith(".txt") and "_" in file:
+                if not file.startswith("26_3"):
+                    continue
                 full_file_path = os.path.join(root, file)
                 print(f"{file_idx + 1} / {length}: {full_file_path}")
                 frames = read_detections(os.path.join(root, full_file_path))
@@ -359,14 +361,14 @@ if __name__ == '__main__':
                     max_age=max_age
                 )
 
-                results = postprocess_merge_fragments(
-                    results,
-                    min_len=15,  # fragments are tracks with < x detections
-                    max_gap=max_age,  # allow up to y empty frames between pieces
-                    min_iou=0,  # accept if boundary IOU ≥ x
-                    max_center_ratio=0.75,  # or if centers within x × avg diag
-                    class_aware=class_aware
-                )
+                # results = postprocess_merge_fragments(
+                #     results,
+                #     min_len=15,  # fragments are tracks with < x detections
+                #     max_gap=max_age,  # allow up to y empty frames between pieces
+                #     min_iou=0,  # accept if boundary IOU ≥ x
+                #     max_center_ratio=0.75,  # or if centers within x × avg diag
+                #     class_aware=class_aware
+                # )
 
                 tracks = defaultdict(list)
                 for r in results:
@@ -380,5 +382,3 @@ if __name__ == '__main__':
                 os.makedirs(target_folder, exist_ok=True)
                 target_file = os.path.join(target_folder, p.stem + ".csv")
                 write_tracks_csv(results, target_file)
-                break
-            break

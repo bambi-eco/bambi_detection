@@ -7,24 +7,20 @@ from pathlib import Path
 
 import cv2
 
-def id_to_color(identifier, *, saturation=0.65, lightness=0.5) -> tuple[int, int, int]:
-    """
-    Deterministically map an identifier to a vivid, distinct hex color.
-    - Uses golden-ratio-based hue spacing for good separation.
-    - saturation/lightness can be tuned (0..1).
-    """
-    # Hash to a 64-bit integer for stability across runs
-    h64 = int.from_bytes(
-        hashlib.sha256(str(identifier).encode("utf-8")).digest()[:8],
-        byteorder="big"
-    )
-    # Golden ratio conjugate gives well-spaced hues
-    phi = 0.618033988749895
-    hue = (h64 * phi) % 1.0
+from src.bambi.georeference_deepsort_mot import deviating_folders
 
-    # colorsys uses HLS (note the order!)
-    r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
-    return (r, g, b)
+
+def id_to_color(identifier, *, saturation=0.65, lightness=0.5):
+    """
+    Deterministically map any identifier (int/str/etc.) to a distinct hex color.
+    Avoids float precision issues by deriving hue from hash bytes directly.
+    """
+    # 32-bit fraction from the hash (enough granularity for distinct hues)
+    h = hashlib.sha256(str(identifier).encode("utf-8")).digest()
+    hue = int.from_bytes(h[:4], "big") / 2**32  # in [0,1)
+
+    r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)  # note HLS order
+    return (r * 255, g * 255, b * 255)
 
 
 if __name__ == '__main__':
@@ -46,6 +42,8 @@ if __name__ == '__main__':
             if file.endswith(".csv") and "_" in file:
                 full_file_path = os.path.join(root, file)
                 p = Path(full_file_path)
+                if p.stem != "26_3":
+                    continue
                 track_files[p.parent.name + "/" + p.stem] = full_file_path
 
     for root, dirs, files in os.walk(detections_base_folder):
@@ -73,8 +71,8 @@ if __name__ == '__main__':
                 tid = int(row[1])
                 # to be compatible with geo-referenced bounding boxes we only care about the track id
                 sequence_tracks[frame].append((row_idx, tid))
-        detections = []
 
+        detections = []
         with (open(detection_files[key], "r", encoding="utf-8") as source):
             for idx, line in enumerate(source):
                 if idx == 0:
@@ -89,9 +87,11 @@ if __name__ == '__main__':
                 class_id = int(parts[6])
                 detections.append((frame, x1, y1, x2, y2, confidence, class_id))
 
+        colors = set()
         for frame_id in sequence_tracks.keys():
             # Z:\sequences\test\10_1\img1
             image_path = os.path.join(image_folders[key], "img1", frame_id + ".jpg")
+            current_sub_folder = deviating_folders(images_base_folder, image_path)
             image = cv2.imread(image_path, cv2.IMREAD_COLOR)
 
             bounding_boxes = sequence_tracks[frame_id]
@@ -103,6 +103,7 @@ if __name__ == '__main__':
                 max_x = bb[3]
                 max_y = bb[4]
                 color = id_to_color(bb_info[1])
+                colors.add(color)
                 cv2.rectangle(
                     image,
                     (int(min_x), int(min_y)),
@@ -111,9 +112,8 @@ if __name__ == '__main__':
                     thickness=2
                 )
 
-            cv2.imshow("Image with box", image)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-
+            image_target_folder = os.path.join(target_base_folder, Path(current_sub_folder))
+            os.makedirs(image_target_folder, exist_ok=True)
+            cv2.imwrite(os.path.join(image_target_folder, frame_id + ".jpg"), image)
 
 
