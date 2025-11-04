@@ -28,11 +28,12 @@ if __name__ == '__main__':
     # Paths
     base_dir = r"Z:\dets\source"
     correction_folder = r"Z:\correction_data"
-    target_base = r"Z:\dets\georeferenced"
+    target_base = r"Z:\dets\georeferenced_wgs84"
     additional_corrections_path = r"Z:\correction_data\corrections.json"
     input_resolution = Resolution(1024, 1024)
     skip_existing = True
     rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
+    transform_to_target_crs = True
 
     ##################################################################################
 
@@ -117,7 +118,7 @@ if __name__ == '__main__':
                         x2 = float(parts[3])
                         y2 = float(parts[4])
                         confidence = float(parts[5])
-                        class_id = float(parts[6])
+                        class_id = int(parts[6])
 
                         for additional_correction in additional_corrections:
                             if additional_correction["start frame"] < frame < additional_correction["end frame"]:
@@ -135,17 +136,20 @@ if __name__ == '__main__':
                         world_coordinates = label_to_world_coordinates([x1, y1, x2, y1, x2, y2, x1, y2],
                                                                        input_resolution, tri_mesh, camera)
                         xx = world_coordinates[:, 0] + x_offset
+                        yy = world_coordinates[:, 1] + y_offset
+                        zz = world_coordinates[:, 2] + z_offset
+
+                        if transform_to_target_crs:
+                            transformed = rel_transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
+                            xx = transformed[0]
+                            yy = transformed[1]
+                            zz = transformed[2]
                         min_x = min(xx)
                         max_x = max(xx)
-                        yy = world_coordinates[:, 1] + y_offset
                         min_y = min(yy)
                         max_y = max(yy)
-                        zz = world_coordinates[:, 2] + z_offset
                         min_z = min(zz)
                         max_z = max(zz)
-
-                        transformed = rel_transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
-
                         target.write(f"{frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
         finally:
             # free up resources
