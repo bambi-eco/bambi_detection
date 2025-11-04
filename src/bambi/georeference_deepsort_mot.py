@@ -58,6 +58,27 @@ if __name__ == '__main__':
     # Print result
     for idx, (parent, files) in enumerate(parent_dict.items()):
         print(f"Processing flight {parent}: {idx + 1} / {number_of_flights}")
+        # precheck
+        remaining_files = []
+        number_of_files = len(files)
+        for fidx, f in enumerate(files):
+            # create target folder and files
+            p = Path(f)
+            target_folder = os.path.join(target_base, deviating_folders(base_dir, f))
+            target_file = os.path.join(target_folder, p.name)
+            if skip_existing and os.path.exists(target_file):
+                with (open(f, "r", encoding="utf-8") as source,
+                      open(os.path.join(target_folder, p.name), "r", encoding="utf-8") as target):
+                    if len(source.readlines()) != len(target.readlines()):
+                        remaining_files.append(f)
+                    else:
+                        print(f"--- {fidx + 1}/{number_of_files}: {f}")
+                        print(f"----- {f} already processed")
+            else:
+                remaining_files.append(f)
+        if len(remaining_files) == 0:
+            print("--- all files already processed")
+            continue
         ctx = None
         mesh_data = None
         texture_data = None
@@ -96,19 +117,12 @@ if __name__ == '__main__':
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
             mesh_aabb = get_aabb(mesh_data.vertices)
-            number_of_files = len(files)
-            for fidx, f in enumerate(files):
+            for fidx, f in enumerate(remaining_files):
                 print(f"--- {fidx + 1}/{number_of_files}: {f}")
                 # create target folder and files
                 p = Path(f)
                 target_folder = os.path.join(target_base, deviating_folders(base_dir, f))
                 target_file = os.path.join(target_folder, p.name)
-                if skip_existing and os.path.exists(target_file):
-                    with (open(f, "r", encoding="utf-8") as source,
-                          open(os.path.join(target_folder, p.name), "r", encoding="utf-8") as target):
-                        if len(source.readlines()) == len(target.readlines()):
-                            print("----- already processed")
-                            continue
                 os.makedirs(target_folder, exist_ok=True)
                 with (open(f, "r", encoding="utf-8") as source,
                       open(os.path.join(target_folder, p.name), "w", encoding="utf-8") as target):
@@ -141,6 +155,10 @@ if __name__ == '__main__':
                         camera = get_camera_for_frame(poses, frame, cor_rotation_eulers, cor_translation)
                         world_coordinates = label_to_world_coordinates([x1, y1, x2, y1, x2, y2, x1, y2],
                                                                        input_resolution, tri_mesh, camera)
+                        if len(world_coordinates) == 0:
+                            target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            continue
+
                         xx = world_coordinates[:, 0] + x_offset
                         yy = world_coordinates[:, 1] + y_offset
                         zz = world_coordinates[:, 2] + z_offset
@@ -150,13 +168,16 @@ if __name__ == '__main__':
                             xx = transformed[0]
                             yy = transformed[1]
                             zz = transformed[2]
-                        min_x = min(xx)
-                        max_x = max(xx)
-                        min_y = min(yy)
-                        max_y = max(yy)
-                        min_z = min(zz)
-                        max_z = max(zz)
-                        target.write(f"{frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
+                        if len(xx) > 0 and len(yy) > 0 and len(zz) > 0:
+                            min_x = min(xx)
+                            max_x = max(xx)
+                            min_y = min(yy)
+                            max_y = max(yy)
+                            min_z = min(zz)
+                            max_z = max(zz)
+                            target.write(f"{frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
+                        else:
+                            target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
         finally:
             # free up resources
             release_all(ctx)
