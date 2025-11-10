@@ -176,7 +176,7 @@ if __name__ == '__main__':
                         # todo remove again
                         # todo should return the same as the input, but does not...
                         pxl_coord = world_to_pixel_coord(world_coordinates,
-                                                         input_resolution.width, input_resolution.height, camera)
+                                                         input_resolution.width, input_resolution.height, camera, ensure_int=False)
                         if len(world_coordinates) == 0:
                             target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
                             transformation_errors += 1
