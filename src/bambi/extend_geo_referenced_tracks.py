@@ -104,7 +104,8 @@ def interpolate_gaps_for_track(
             if interpolate_conf:
                 conf = _lerp(d0.conf, d1.conf, t)
             else:
-                conf = min(d0.conf, d1.conf)
+                conf = -1 # signale that it is a interpolated confidence
+                # conf = min(d0.conf, d1.conf)
             # Class: stick with the left anchor (common for MOT)
             cls = d0.cls
 

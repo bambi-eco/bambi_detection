@@ -2,21 +2,36 @@ import json
 import os
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
-from alfspy.core.rendering import Resolution
+from alfspy.core.convert import world_to_pixel_coord
+from alfspy.core.rendering import Resolution, Camera
 from alfspy.core.util.geo import get_aabb
-from alfspy.core.util.pyrrs import quaternion_from_eulers
-from alfspy.orthografic_projection import get_camera_for_frame
 from alfspy.render.render import make_mgl_context, read_gltf, process_render_data, release_all
 from pyproj.enums import TransformDirection
 from pyrr import Quaternion, Vector3
 from trimesh import Trimesh
-from alfspy.core.geo import Transform
 
 from src.bambi.util.projection_util import label_to_world_coordinates
 
 from pyproj import CRS, Transformer
+
+def get_camera_for_frame(matched_poses, frame_idx, cor_rotation_eulers, cor_translation, overrule_fov: Optional[float] = None):
+    cur_frame_data = matched_poses['images'][frame_idx]
+    fovy = cur_frame_data['fovy'][0]
+
+    if overrule_fov is not None:
+        fovy = overrule_fov
+
+    position = Vector3(cur_frame_data['location'])
+    rotation_eulers = (Vector3(
+        [np.deg2rad(val % 360.0) for val in cur_frame_data['rotation']]) - cor_rotation_eulers) * -1
+
+    position += cor_translation
+    rotation = Quaternion.from_eulers(rotation_eulers)
+
+    return Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation)
 
 def deviating_folders(parent_path: str, sub_path: str) -> str:
     # If sub_path is a file, work with its directory
@@ -31,7 +46,7 @@ if __name__ == '__main__':
     target_base = r"Z:\dets\georeferenced2"
     additional_corrections_path = r"Z:\correction_data\corrections.json"
     input_resolution = Resolution(1024, 1024)
-    skip_existing = True
+    skip_existing = False
     rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
     transform_to_target_crs = False
 
@@ -157,6 +172,11 @@ if __name__ == '__main__':
                         camera = get_camera_for_frame(poses, frame, cor_rotation_eulers, cor_translation)
                         world_coordinates = label_to_world_coordinates([x1, y1, x2, y1, x2, y2, x1, y2],
                                                                        input_resolution, tri_mesh, camera)
+
+                        # todo remove again
+                        # todo should return the same as the input, but does not...
+                        pxl_coord = world_to_pixel_coord(world_coordinates,
+                                                         input_resolution.width, input_resolution.height, camera)
                         if len(world_coordinates) == 0:
                             target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
                             transformation_errors += 1
@@ -180,7 +200,7 @@ if __name__ == '__main__':
                             max_z = max(zz)
                             target.write(f"{frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
                         else:
-                            target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {-1} {class_id}\n")
                             transformation_errors += 1
         finally:
             # free up resources
