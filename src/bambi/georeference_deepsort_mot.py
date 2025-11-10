@@ -28,12 +28,12 @@ if __name__ == '__main__':
     # Paths
     base_dir = r"Z:\dets\source"
     correction_folder = r"Z:\correction_data"
-    target_base = r"Z:\dets\georeferenced_wgs84"
+    target_base = r"Z:\dets\georeferenced2"
     additional_corrections_path = r"Z:\correction_data\corrections.json"
     input_resolution = Resolution(1024, 1024)
     skip_existing = True
     rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
-    transform_to_target_crs = True
+    transform_to_target_crs = False
 
     ##################################################################################
 
@@ -55,7 +55,8 @@ if __name__ == '__main__':
     parent_dict = dict(parent_dict)
 
     number_of_flights = len(parent_dict)
-    # Print result
+    transformation_errors = 0
+    total_bb = 0
     for idx, (parent, files) in enumerate(parent_dict.items()):
         print(f"Processing flight {parent}: {idx + 1} / {number_of_flights}")
         # precheck
@@ -139,6 +140,7 @@ if __name__ == '__main__':
                         y2 = float(parts[4])
                         confidence = float(parts[5])
                         class_id = int(parts[6])
+                        total_bb += 1
 
                         for additional_correction in additional_corrections:
                             if additional_correction["start frame"] < frame < additional_correction["end frame"]:
@@ -157,6 +159,7 @@ if __name__ == '__main__':
                                                                        input_resolution, tri_mesh, camera)
                         if len(world_coordinates) == 0:
                             target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            transformation_errors += 1
                             continue
 
                         xx = world_coordinates[:, 0] + x_offset
@@ -178,9 +181,11 @@ if __name__ == '__main__':
                             target.write(f"{frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
                         else:
                             target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            transformation_errors += 1
         finally:
             # free up resources
             release_all(ctx)
             del mesh_data
             del texture_data
             del tri_mesh
+    print(f"Could not transform {transformation_errors} of {total_bb} bounding boxes")

@@ -334,7 +334,7 @@ def write_tracks_csv(results: List[Tuple[int, int, Detection]], out_path: str):
 
 if __name__ == '__main__':
     # Paths
-    base_dir = r"Z:\dets\georeferenced"
+    base_dir = r"Z:\dets\georeferenced2"
     target_dir = r"Z:\dets\georeferenced_tracks"
     iou_thresh = 0.6
     class_aware = True
@@ -349,8 +349,6 @@ if __name__ == '__main__':
         length = len(files)
         for file_idx, file in enumerate(files):
             if file.endswith(".txt") and "_" in file:
-                if not file.startswith("26_3"):
-                    continue
                 full_file_path = os.path.join(root, file)
                 print(f"{file_idx + 1} / {length}: {full_file_path}")
                 frames = read_detections(os.path.join(root, full_file_path))
