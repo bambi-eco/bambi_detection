@@ -2,19 +2,26 @@ import math
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict
+
+import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from src.bambi.georeference_deepsort_mot import deviating_folders
 
 
 @dataclass
 class Detection:
+    source_id: int
     frame: int
     x1: float
     y1: float
+    z1: float
     x2: float
     y2: float
+    z2: float
     conf: float
     cls: int
 
@@ -24,11 +31,19 @@ class Track:
     cls: Optional[int]
     x1: float
     y1: float
+    z1: float
     x2: float
     y2: float
+    z2: float
     last_frame: int
     age: int = 0      # number of consecutive frames not matched
     hits: int = 0     # number of total matches
+
+class TrackerMode(Enum):
+    GREEDY = 1
+    HUNGARIAN = 2
+    CENTER = 3
+    HUNGARIAN_CENTER = 4
 
 def _bbox_iou(a, b) -> float:
     ax1, ay1, ax2, ay2 = a
@@ -182,33 +197,37 @@ def parse_line(line: str) -> Optional[Detection]:
         return None
     # allow both comma and whitespace separated
     parts = [p for p in line.replace(",", " ").split() if p]
-    if len(parts) < 9:
+    if len(parts) < 8:
         raise ValueError(f"Line has too few fields ({len(parts)}): {line}")
 
-    frame = int(parts[0])
-    x1 = float(parts[1]); y1 = float(parts[2])
-    # parts[3] is min_z (ignored)
-    x2 = float(parts[4]); y2 = float(parts[5])
-    # parts[6] is max_z (ignored)
-    conf = float(parts[7])
+    source_id = int(parts[0])
+    frame = int(parts[1])
+    x1 = float(parts[2])
+    y1 = float(parts[3])
+    z1 = float(parts[4])
+    x2 = float(parts[5])
+    y2 = float(parts[6])
+    z2 = float(parts[7])
+
+    conf = float(parts[8])
     try:
-        cls = int(parts[8])
+        cls = int(parts[9])
     except ValueError:
         # fallback because initial export is messed up ^^
-        cls = int(float(parts[8]))
+        cls = int(float(parts[9]))
     # Ensure x1<=x2 and y1<=y2
     if x2 < x1: x1, x2 = x2, x1
     if y2 < y1: y1, y2 = y2, y1
-    return Detection(frame, x1, y1, x2, y2, conf, cls)
+    return Detection(source_id, frame, x1, y1, z1, x2, y2, z2, conf, cls)
 
-def read_detections(path: str) -> Dict[int, List[Detection]]:
+def read_detections(path: str, min_confidence: float = 0.0) -> Dict[int, List[Detection]]:
     frames = defaultdict(list)
     with open(path, "r", encoding="utf-8") as f:
         for ln, line in enumerate(f, 1):
             if not line.strip():
                 continue
             det = parse_line(line)
-            if det is not None:
+            if det is not None and det.conf > min_confidence:
                 frames[det.frame].append(det)
     return dict(frames)
 
@@ -267,11 +286,256 @@ def greedy_match(
     unmatched_trks = [i for i in range(len(tracks)) if i not in trk_used]
     return matches, unmatched_dets, unmatched_trks
 
+def hungarian_match(detections, tracks, iou_thr, class_aware):
+    nD, nT = len(detections), len(tracks)
+    if nD == 0 or nT == 0:
+        return [], list(range(nD)), list(range(nT))
+
+    # Build IoU matrix
+    IoU = np.zeros((nD, nT), dtype=np.float32)
+    for di, d in enumerate(detections):
+        for ti, t in enumerate(tracks):
+            if class_aware and t.cls is not None and d.cls != t.cls:
+                continue
+            IoU[di, ti] = iou(
+                (d.x1, d.y1, d.x2, d.y2),
+                (t.x1, t.y1, t.x2, t.y2)
+            )
+
+    # large cost for invalid/low IoU so they don't get selected
+    cost = 1.0 - IoU
+    cost[IoU < iou_thr] = 1e6
+
+    row_ind, col_ind = linear_sum_assignment(cost)
+
+    matches = []
+    det_used = set()
+    trk_used = set()
+    for di, ti in zip(row_ind, col_ind):
+        if IoU[di, ti] >= iou_thr and cost[di, ti] < 1e6:
+            matches.append((di, ti))
+            det_used.add(di)
+            trk_used.add(ti)
+
+    unmatched_dets = [i for i in range(nD) if i not in det_used]
+    unmatched_trks = [i for i in range(nT) if i not in trk_used]
+
+    return matches, unmatched_dets, unmatched_trks
+
+def greedy_match_by_center_distance(
+    detections: List[Detection],
+    tracks: List[Track],
+    max_dist: float,
+    class_aware: bool
+) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+    """
+    Greedy assignment by increasing center-point distance.
+
+    Args:
+      detections: list of Detection objects (with x1,y1,x2,y2 and optionally cls)
+      tracks: list of Track objects (with x1,y1,x2,y2 and optionally cls)
+      max_dist: maximum allowed distance between centers (same units as coordinates)
+      class_aware: if True, only match det/track with same cls (when track.cls is not None)
+
+    Returns:
+      matches: list of (det_idx, track_idx_in_tracks_list)
+      unmatched_dets: indices of detections not matched
+      unmatched_trks: indices of tracks not matched
+    """
+    nD, nT = len(detections), len(tracks)
+    if nD == 0 or nT == 0:
+        return [], list(range(nD)), list(range(nT))
+
+    max_dist_sq = max_dist * max_dist
+
+    # Precompute centers for speed
+    det_centers = [_center([d.x1, d.y1, d.x2, d.y2]) for d in detections]
+    trk_centers = [_center([t.x1, t.y1, t.x2, t.y2]) for t in tracks]
+
+    pairs = []  # (distance_sq, det_idx, trk_idx)
+
+    for di, d in enumerate(detections):
+        dcx, dcy = det_centers[di]
+        for ti, t in enumerate(tracks):
+            if class_aware and t.cls is not None and d.cls != t.cls:
+                continue
+
+            tcx, tcy = trk_centers[ti]
+            dx = dcx - tcx
+            dy = dcy - tcy
+            dist_sq = dx * dx + dy * dy
+
+            if dist_sq <= max_dist_sq:
+                pairs.append((dist_sq, di, ti))
+
+    # Sort by distance ascending
+    pairs.sort(key=lambda x: x[0])
+
+    det_used = [False] * nD
+    trk_used = [False] * nT
+    matches: List[Tuple[int, int]] = []
+
+    for dist_sq, di, ti in pairs:
+        if det_used[di] or trk_used[ti]:
+            continue
+        det_used[di] = True
+        trk_used[ti] = True
+        matches.append((di, ti))
+
+    unmatched_dets = [i for i, used in enumerate(det_used) if not used]
+    unmatched_trks = [i for i, used in enumerate(trk_used) if not used]
+
+    return matches, unmatched_dets, unmatched_trks
+
+def greedy_center_fallback(
+    detections: List["Detection"],
+    tracks: List["Track"],
+    unmatched_det_idxs: List[int],
+    unmatched_trk_idxs: List[int],
+    max_dist: float,
+    class_aware: bool,
+) -> List[Tuple[int, int]]:
+    """
+    Greedy center-distance matching on subsets of dets & tracks.
+    Returns matches as (global_det_idx, global_trk_idx).
+    """
+    if not unmatched_det_idxs or not unmatched_trk_idxs:
+        return []
+
+    max_dist_sq = max_dist * max_dist
+
+    # precompute centers only for what we need
+    det_centers = {
+        di: _center([detections[di].x1, detections[di].y1,
+                        detections[di].x2, detections[di].y2])
+        for di in unmatched_det_idxs
+    }
+    trk_centers = {
+        ti: _center([tracks[ti].x1, tracks[ti].y1,
+                        tracks[ti].x2, tracks[ti].y2])
+        for ti in unmatched_trk_idxs
+    }
+
+    pairs = []  # (dist_sq, di, ti)
+
+    for di in unmatched_det_idxs:
+        d = detections[di]
+        dcx, dcy = det_centers[di]
+        for ti in unmatched_trk_idxs:
+            t = tracks[ti]
+            if class_aware and t.cls is not None and d.cls != t.cls:
+                continue
+
+            tcx, tcy = trk_centers[ti]
+            dx = dcx - tcx
+            dy = dcy - tcy
+            dist_sq = dx * dx + dy * dy
+            if dist_sq <= max_dist_sq:
+                pairs.append((dist_sq, di, ti))
+
+    # sort ascending by distance
+    pairs.sort(key=lambda x: x[0])
+
+    det_used = set()
+    trk_used = set()
+    matches: List[Tuple[int, int]] = []
+
+    for dist_sq, di, ti in pairs:
+        if di in det_used or ti in trk_used:
+            continue
+        det_used.add(di)
+        trk_used.add(ti)
+        matches.append((di, ti))
+
+    return matches
+
+
+# --- combined matcher -----------------------------------------------------
+
+def match_hungarian_iou_then_center(
+    detections: List["Detection"],
+    tracks: List["Track"],
+    iou_thr: float,
+    max_dist: float,
+    class_aware: bool,
+) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
+    """
+    Combined matching:
+      1) Hungarian on IoU (global optimum) with IOU threshold.
+      2) Fallback greedy matching on center distance for remaining unmatched
+         dets/tracks (with max_dist threshold).
+
+    Returns:
+      matches: list of (det_idx, track_idx)
+      unmatched_dets: indices of detections not matched
+      unmatched_trks: indices of tracks not matched
+    """
+    nD, nT = len(detections), len(tracks)
+    if nD == 0 or nT == 0:
+        return [], list(range(nD)), list(range(nT))
+
+    # --- Stage 1: Hungarian on IoU ----------------------------------------
+    IoU = np.zeros((nD, nT), dtype=np.float32)
+
+    for di, d in enumerate(detections):
+        for ti, t in enumerate(tracks):
+            if class_aware and t.cls is not None and d.cls != t.cls:
+                # leave IoU at 0 (will be treated as invalid under threshold)
+                continue
+            IoU[di, ti] = iou(
+                (d.x1, d.y1, d.x2, d.y2),
+                (t.x1, t.y1, t.x2, t.y2)
+            )
+
+    # cost matrix: 1 - IoU, but "block" pairs below iou_thr with large cost
+    LARGE = 1e6
+    cost = 1.0 - IoU
+    cost[IoU < iou_thr] = LARGE
+
+    row_ind, col_ind = linear_sum_assignment(cost)
+
+    matches: List[Tuple[int, int]] = []
+    det_used = set()
+    trk_used = set()
+
+    for di, ti in zip(row_ind, col_ind):
+        if IoU[di, ti] >= iou_thr and cost[di, ti] < LARGE:
+            matches.append((di, ti))
+            det_used.add(di)
+            trk_used.add(ti)
+
+    # remaining unmatched after IoU phase
+    unmatched_dets = [i for i in range(nD) if i not in det_used]
+    unmatched_trks = [i for i in range(nT) if i not in trk_used]
+
+    # --- Stage 2: center-distance fallback on remaining -------------------
+    center_matches = greedy_center_fallback(
+        detections=detections,
+        tracks=tracks,
+        unmatched_det_idxs=unmatched_dets,
+        unmatched_trk_idxs=unmatched_trks,
+        max_dist=max_dist,
+        class_aware=class_aware,
+    )
+
+    # integrate fallback matches
+    for di, ti in center_matches:
+        matches.append((di, ti))
+        det_used.add(di)
+        trk_used.add(ti)
+
+    unmatched_dets = [i for i in range(nD) if i not in det_used]
+    unmatched_trks = [i for i in range(nT) if i not in trk_used]
+
+    return matches, unmatched_dets, unmatched_trks
+
 def track_detections(
     frames: Dict[int, List[Detection]],
     iou_thr: float = 0.9,
     class_aware: bool = True,
-    max_age: int = 2
+    max_age: int = 2,
+    tracker_mode: TrackerMode = TrackerMode.GREEDY,
+    max_center_distance: float = 10.0,
 ) -> List[Tuple[int, int, Detection]]:
     """
     Run IOU-based tracking.
@@ -287,13 +551,20 @@ def track_detections(
     for f in all_frames:
         dets = frames[f]
         # match current detections to active tracks
-        matches, unmatched_dets, unmatched_trks = greedy_match(dets, active_tracks, iou_thr, class_aware)
+        if tracker_mode == TrackerMode.GREEDY:
+            matches, unmatched_dets, unmatched_trks = greedy_match(dets, active_tracks, iou_thr, class_aware)
+        elif tracker_mode == TrackerMode.HUNGARIAN:
+            matches, unmatched_dets, unmatched_trks = hungarian_match(dets, active_tracks, iou_thr, class_aware)
+        elif tracker_mode == TrackerMode.HUNGARIAN_CENTER:
+            matches, unmatched_dets, unmatched_trks = match_hungarian_iou_then_center(dets, active_tracks, iou_thr, max_center_distance, class_aware)
+        else:
+            matches, unmatched_dets, unmatched_trks = greedy_match_by_center_distance(dets, active_tracks, max_center_distance, class_aware)
 
         # update matched tracks
         for di, ti in matches:
             d = dets[di]
             t = active_tracks[ti]
-            t.x1, t.y1, t.x2, t.y2 = d.x1, d.y1, d.x2, d.y2
+            t.x1, t.y1, t.z1, t.x2, t.y2, t.z2 = d.x1, d.y1, d.z1, d.x2, d.y2, d.z2
             t.last_frame = f
             t.hits += 1
             t.age = 0
@@ -305,7 +576,7 @@ def track_detections(
             t = Track(
                 tid=next_tid,
                 cls=(d.cls if class_aware else None),
-                x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2,
+                x1=d.x1, y1=d.y1, z1=d.z1, x2=d.x2, y2=d.y2, z2=d.z2,
                 last_frame=f,
                 age=0, hits=1
             )
@@ -330,15 +601,19 @@ def write_tracks_csv(results: List[Tuple[int, int, Detection]], out_path: str):
     with open(out_path, "w", encoding="utf-8") as f:
         # f.write("frame_id track_id min_x min_y max_x max_y confidence class_id\n")
         for frame, tid, d in results:
-            f.write(f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.x2:.6f},{d.y2:.6f},{d.conf:.6f},{d.cls}\n")
+            f.write(f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},{d.conf:.6f},{d.cls}\n")
+
 
 if __name__ == '__main__':
     # Paths
-    base_dir = r"Z:\dets\georeferenced2"
-    target_dir = r"Z:\dets\georeferenced_tracks"
-    iou_thresh = 0.6
+    base_dir = r"Z:\dets\georeferenced_smoothed"
+    target_dir = r"Z:\dets\georeferenced_testing_around"
+    iou_thresh = 0.3
     class_aware = True
     max_age = -1
+    minimum_confidence = 0.0
+    tracker = TrackerMode.HUNGARIAN
+    max_center_distance = 0.2 #only used with TrackerMode.CENTER or TrackerMode.HUNGARIAN_CENTER
 
     ##############################
 
@@ -348,15 +623,21 @@ if __name__ == '__main__':
     for root, dirs, files in os.walk(base_dir):
         length = len(files)
         for file_idx, file in enumerate(files):
+            # todo remove
+            if file != "14_1.txt":
+                continue
+
             if file.endswith(".txt") and "_" in file:
                 full_file_path = os.path.join(root, file)
                 print(f"{file_idx + 1} / {length}: {full_file_path}")
-                frames = read_detections(os.path.join(root, full_file_path))
+                frames = read_detections(os.path.join(root, full_file_path), min_confidence=minimum_confidence)
                 results = track_detections(
                     frames,
                     iou_thr=iou_thresh,
                     class_aware=class_aware,
-                    max_age=max_age
+                    max_age=max_age,
+                    tracker_mode=tracker,
+                    max_center_distance=max_center_distance
                 )
 
                 # results = postprocess_merge_fragments(

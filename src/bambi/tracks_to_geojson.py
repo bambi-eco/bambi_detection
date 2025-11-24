@@ -45,8 +45,8 @@ def bgr_to_hex(bgr: Tuple[int, int, int]) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 if __name__ == '__main__':
-    tracks_base = r"Z:\dets\georeferenced_tracks"
-    target_base = r"Z:\dets\georeferenced_tracks_geojson"
+    tracks_base = r"Z:\dets\georeferenced_testing_around"
+    target_base = r"Z:\dets\georeferenced_testing_around\geojson"
     rel_transformer = Transformer.from_crs(CRS.from_epsg(32633), CRS.from_epsg(4326))
     transform_to_target_crs = False
     export_single_tracks = False
@@ -174,6 +174,7 @@ if __name__ == '__main__':
                 if export_single_tracks:
                     with open(target_file, "w", encoding="utf-8") as f:
                         json.dump(fc, f, ensure_ascii=False, indent=2)
+                    print(f"Exported {target_file}")
 
                 combined_features.extend(features)
 
@@ -185,3 +186,4 @@ if __name__ == '__main__':
             if export_complete_flight:
                 with open(combined_path, "w", encoding="utf-8") as f:
                     json.dump(combined_fc, f, ensure_ascii=False, indent=2)
+                print(f"Exported {combined_path}")

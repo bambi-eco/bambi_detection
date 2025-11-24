@@ -5,7 +5,9 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 from alfspy.core.convert import world_to_pixel_coord
+from alfspy.core.convert.convert import world_to_pixel_coord2
 from alfspy.core.rendering import Resolution
 from alfspy.core.util.geo import get_aabb
 from alfspy.orthografic_projection import get_camera_for_frame
@@ -16,6 +18,7 @@ from pyrr import Vector3
 from trimesh import Trimesh
 
 from src.bambi.georeference_deepsort_mot import deviating_folders
+from src.bambi.georeferenced_tracking import Detection
 from src.bambi.util.projection_util import label_to_world_coordinates
 
 from dataclasses import dataclass
@@ -23,15 +26,6 @@ from typing import Dict, List, Tuple, Iterable, Optional, Set
 import csv
 import math
 import pathlib
-
-@dataclass
-class Detection:
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-    conf: float
-    cls: int
 
 @dataclass
 class Track:
@@ -99,8 +93,10 @@ def interpolate_gaps_for_track(
             t = (f - f0) / denom  # distance weighting
             x1 = _lerp(d0.x1, d1.x1, t)
             y1 = _lerp(d0.y1, d1.y1, t)
+            z1 = _lerp(d0.z1, d1.z1, t)
             x2 = _lerp(d0.x2, d1.x2, t)
             y2 = _lerp(d0.y2, d1.y2, t)
+            z2 = _lerp(d0.z2, d1.z2, t)
             if interpolate_conf:
                 conf = _lerp(d0.conf, d1.conf, t)
             else:
@@ -109,7 +105,7 @@ def interpolate_gaps_for_track(
             # Class: stick with the left anchor (common for MOT)
             cls = d0.cls
 
-            out.append((f, Detection(x1, y1, x2, y2, conf, cls)))
+            out.append((f, Detection(f, x1, y1, z1, x2, y2, z2, conf, cls)))
             interpolated_frames.add(f)
 
     # Sort again because we inserted in-between frames
@@ -173,12 +169,14 @@ def read_tracks_csv(path: str) -> Dict[int, List[Tuple[int, Detection]]]:
 
             x1 = float(row[2])
             y1 = float(row[3])
-            x2 = float(row[4])
-            y2 = float(row[5])
-            conf = float(row[6])
-            cls = int(float(row[7]))  # tolerant if written as "0.0"
+            z1 = float(row[4])
+            x2 = float(row[5])
+            y2 = float(row[6])
+            z2 = float(row[7])
+            conf = float(row[8])
+            cls = int(float(row[9]))  # tolerant if written as "0.0"
 
-            det = Detection(x1=x1, y1=y1, x2=x2, y2=y2, conf=conf, cls=cls)
+            det = Detection(frame=frame_id, x1=x1, y1=y1, z1=z1, x2=x2, y2=y2, z2=z2, conf=conf, cls=cls)
             tracks.setdefault(track_id, []).append((frame_id, det))
 
     # Sort each track by frame_id
@@ -285,10 +283,12 @@ if __name__ == '__main__':
                     for frame_idx, det in track:
                         x1 = det.x1
                         y1 = det.y1
+                        z1 = det.z1
                         x2 = det.x2
                         y2 = det.y2
+                        z2 = det.z2
                         if write_global_coordinates:
-                            to_write[frame_idx].append((track_idx, x1, y1, x2, y2, det.conf, det.cls))
+                            to_write[frame_idx].append((track_idx, x1, y1, z1, x2, y2, z2, det.conf, det.cls))
                         else:
                             for additional_correction in additional_corrections:
                                 if additional_correction["start frame"] < frame_idx < additional_correction[
@@ -296,7 +296,12 @@ if __name__ == '__main__':
                                     translation = additional_correction.get('translation', translation)
                                     rotation = additional_correction.get('rotation', rotation)
                                     break
-
+                            x1 -= x_offset
+                            y1 -= y_offset
+                            z1 -= z_offset
+                            x2 -= x_offset
+                            y2 -= y_offset
+                            z2 -= z_offset
                             image_metadata = poses["images"][frame_idx]
                             fov = image_metadata["fovy"][0]
 
@@ -305,21 +310,43 @@ if __name__ == '__main__':
                             cor_translation = Vector3([translation['x'], translation['y'], translation['z']],
                                                       dtype='f4')
                             camera = get_camera_for_frame(poses, frame_idx, cor_rotation_eulers, cor_translation)
-                            pxl_coord = world_to_pixel_coord([x1, y1, 0, x2, y1, 0, x2, y2, 0, x1, y2, 0], input_resolution.width, input_resolution.height, camera)
+                            pxl_coord = np.asarray(world_to_pixel_coord2([x1, x2, x2, x2],[y1, y1, y2, y2],[z1, z1, z2, z2], input_resolution.width, input_resolution.height, camera))
+                            if None in pxl_coord:
+                                continue
                             # todo error maybe due to missing altitude?
-                            print()
+                            xx = pxl_coord[:,0]
+                            yy = pxl_coord[:,1]
+                            minx = min(xx)
+                            maxx = max(xx)
+                            miny = min(yy)
+                            maxy = max(yy)
+                            to_write[frame_idx].append((track_idx, minx, miny, maxx, maxy, det.conf, det.cls))
 
                 with open(target_file, "w") as f:
                     for frame_idx in sorted(to_write.keys()):
                         for det in to_write[frame_idx]:
-                            t_id = det[0]
-                            x1 = det[1]
-                            y1 = det[2]
-                            x2 = det[3]
-                            y2 = det[4]
-                            conf = det[5]
-                            cls = det[6]
-                            f.write(f"{frame_idx:08d},{t_id},{x1:.6f},{y1:.6f},{x2:.6f},{y2:.6f},{conf:.6f},{cls}\n")
+                            if len(det) == 7:
+                                t_id = det[0]
+                                x1 = det[1]
+                                y1 = det[2]
+                                x2 = det[3]
+                                y2 = det[4]
+                                conf = det[5]
+                                cls = det[6]
+                                f.write(f"{frame_idx:08d},{t_id},{x1:.6f},{y1:.6f},{x2:.6f},{y2:.6f},{conf:.6f},{cls}\n")
+                            elif len(det) == 9:
+                                t_id = det[0]
+                                x1 = det[1]
+                                y1 = det[2]
+                                z1 = det[3]
+                                x2 = det[4]
+                                y2 = det[5]
+                                z2 = det[6]
+                                conf = det[7]
+                                cls = det[8]
+                                f.write(f"{frame_idx:08d},{t_id},{x1:.6f},{y1:.6f},{z1:.6f},{x2:.6f},{y2:.6f},{z2:.6f},{conf:.6f},{cls}\n")
+                            else:
+                                raise Exception()
 
         finally:
             # free up resources

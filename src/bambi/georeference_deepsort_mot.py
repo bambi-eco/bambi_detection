@@ -2,20 +2,92 @@ import json
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Sequence
 
 import numpy as np
 from alfspy.core.convert import world_to_pixel_coord
+from alfspy.core.convert.convert import world_to_pixel_coord2
 from alfspy.core.rendering import Resolution, Camera
 from alfspy.core.util.geo import get_aabb
 from alfspy.render.render import make_mgl_context, read_gltf, process_render_data, release_all
+from numpy._typing import ArrayLike, NDArray
 from pyproj.enums import TransformDirection
 from pyrr import Quaternion, Vector3
 from trimesh import Trimesh
+from scipy.signal import savgol_filter
 
 from src.bambi.util.projection_util import label_to_world_coordinates
 
 from pyproj import CRS, Transformer
+
+def smooth_pose_positions(poses, window_size: int = 11):
+    """
+    In-place smoothing of poses['images'][i]['location'] using a simple
+    moving average over time.
+
+    window_size must be odd.
+    """
+    images = poses["images"]
+    n = len(images)
+    if n == 0 or window_size < 2:
+        return
+
+    if window_size % 2 == 0:
+        window_size += 1  # ensure odd
+
+    # N x 3 array of positions
+    positions = np.array([img["location"] for img in images], dtype=float)
+
+    # simple moving average with edge padding
+    pad = window_size // 2
+    kernel = np.ones(window_size, dtype=float) / window_size
+
+    padded = np.pad(positions, ((pad, pad), (0, 0)), mode="edge")
+
+    smoothed = np.empty_like(positions)
+    for dim in range(3):
+        smoothed[:, dim] = np.convolve(padded[:, dim], kernel, mode="valid")
+
+    # write back into poses in-place
+    for img, loc in zip(images, smoothed):
+        img["location"] = loc.tolist()
+
+def smooth_pose_positions_savgol(poses, window_length: int = 11, polyorder: int = 2):
+    """
+    Smooth the drone GPS positions in-place using a Savitzky–Golay filter.
+    window_length must be odd and > polyorder.
+
+    This replaces poses['images'][i]['location'] with smoothed values.
+    """
+
+    images = poses["images"]
+    n = len(images)
+    if n == 0:
+        return
+
+    # Ensure valid parameters
+    if window_length >= n:
+        window_length = n - 1 if (n - 1) % 2 == 1 else n - 2
+    if window_length < 3:
+        return
+    if window_length % 2 == 0:
+        window_length += 1  # must be odd
+
+    # Extract Nx3 matrix of positions
+    positions = np.array([img["location"] for img in images], dtype=float)
+
+    # Apply SavGol smoothing along time axis
+    smoothed = savgol_filter(
+        positions,
+        window_length=window_length,
+        polyorder=polyorder,
+        axis=0,
+        mode="interp"
+    )
+
+    # Write back to poses in-place
+    for img, loc in zip(images, smoothed):
+        img["location"] = loc.tolist()
 
 def get_camera_for_frame(matched_poses, frame_idx, cor_rotation_eulers, cor_translation, overrule_fov: Optional[float] = None):
     cur_frame_data = matched_poses['images'][frame_idx]
@@ -43,12 +115,18 @@ if __name__ == '__main__':
     # Paths
     base_dir = r"Z:\dets\source"
     correction_folder = r"Z:\correction_data"
-    target_base = r"Z:\dets\georeferenced2"
+    target_base = r"Z:\dets\georeferenced5"
     additional_corrections_path = r"Z:\correction_data\corrections.json"
     input_resolution = Resolution(1024, 1024)
     skip_existing = False
     rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
     transform_to_target_crs = False
+    add_offsets = True
+
+    # choose an odd window length, e.g. 11 frames, and low poly order
+    apply_smoothing = True
+    window_length = 11  # tune this based on your frame rate / flight dynamics
+    polyorder = 2
 
     ##################################################################################
 
@@ -121,6 +199,9 @@ if __name__ == '__main__':
             with open(os.path.join(correction_folder, f"{parent}_matched_poses.json"), "r") as f:
                 poses = json.load(f)
 
+            if apply_smoothing:
+                smooth_pose_positions_savgol(poses, window_length=window_length, polyorder=polyorder)
+
             with open(os.path.join(correction_folder, f"{parent}_correction.json"), 'r') as file:
                 correction = json.load(file)
             translation = correction.get('translation', {'x': 0, 'y': 0, 'z': 0})
@@ -140,8 +221,10 @@ if __name__ == '__main__':
                 target_folder = os.path.join(target_base, deviating_folders(base_dir, f))
                 target_file = os.path.join(target_folder, p.name)
                 os.makedirs(target_folder, exist_ok=True)
+                os.makedirs(target_folder + "_reprojected", exist_ok=True) # todo remove
                 with (open(f, "r", encoding="utf-8") as source,
-                      open(os.path.join(target_folder, p.name), "w", encoding="utf-8") as target):
+                      open(os.path.join(target_folder, p.name), "w", encoding="utf-8") as target,
+                      open(os.path.join(target_folder + "_reprojected", p.name), "w", encoding="utf-8") as target2): # todo remove
                     frame_labels = []
                     for idx, line in enumerate(source):
                         if idx == 0:
@@ -173,34 +256,55 @@ if __name__ == '__main__':
                         world_coordinates = label_to_world_coordinates([x1, y1, x2, y1, x2, y2, x1, y2],
                                                                        input_resolution, tri_mesh, camera)
 
-                        # todo remove again
-                        # todo should return the same as the input, but does not...
-                        pxl_coord = world_to_pixel_coord(world_coordinates,
-                                                         input_resolution.width, input_resolution.height, camera, ensure_int=False)
                         if len(world_coordinates) == 0:
-                            target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            target.write(f"{idx} {frame} {-1} {-1} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
                             transformation_errors += 1
                             continue
 
-                        xx = world_coordinates[:, 0] + x_offset
-                        yy = world_coordinates[:, 1] + y_offset
-                        zz = world_coordinates[:, 2] + z_offset
+                        xx = world_coordinates[:, 0]
+                        yy = world_coordinates[:, 1]
+                        zz = world_coordinates[:, 2]
 
                         if transform_to_target_crs:
+                            xx2 = xx + x_offset
+                            yy2 = yy + y_offset
+                            zz2 = zz + z_offset
                             transformed = rel_transformer.transform(xx, yy, zz, direction=TransformDirection.INVERSE)
                             xx = transformed[0]
                             yy = transformed[1]
                             zz = transformed[2]
+
                         if len(xx) > 0 and len(yy) > 0 and len(zz) > 0:
+                            if add_offsets:
+                                xx = xx + x_offset
+                                yy = yy + y_offset
+                                zz = zz + z_offset
                             min_x = min(xx)
                             max_x = max(xx)
                             min_y = min(yy)
                             max_y = max(yy)
                             min_z = min(zz)
                             max_z = max(zz)
-                            target.write(f"{frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
+                            target.write(f"{idx} {frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
+
+                            # todo remove - start
+                            pixel_coords = world_to_pixel_coord2(xx, yy, zz, input_resolution.width,
+                                                                 input_resolution.height, camera)
+                            xs = [p[0] if p is not None else -1 for p in pixel_coords]
+                            ys = [p[1] if p is not None else -1 for p in pixel_coords]
+                            try:
+                                minx = min(xs)
+                                maxx = max(xs)
+                                miny = min(ys)
+                                maxy = max(ys)
+                                target2.write(
+                                    f"{idx} {frame} {minx} {miny} {maxx} {maxy} {confidence} {class_id}\n")
+                            except Exception:
+                                target2.write(
+                                    f"{idx} {frame} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            # todo remove - end
                         else:
-                            target.write(f"{frame} {-1} {-1} {-1} {-1} {-1} {-1} {-1} {class_id}\n")
+                            target.write(f"{idx} {frame} {-1} {-1} {-1} {-1} {-1} {-1} {-1} {class_id}\n")
                             transformation_errors += 1
         finally:
             # free up resources

@@ -8,6 +8,8 @@ from pathlib import Path
 import cv2
 
 from src.bambi.georeference_deepsort_mot import deviating_folders
+from src.bambi.video.video_writer import FFMPEGWriter
+
 
 # combine to video
 # Get-ChildItem *.jpg | Sort-Object Name | ForEach-Object { "file '$($_.Name)'" } | Set-Content list.txt
@@ -46,10 +48,12 @@ def draw_dashed_rectangle(img, pt1, pt2, color, thickness=2, dash_length=10):
         cv2.line(img, (x2, y), (x2, min(y + dash_length, y2)), color, thickness)
 
 if __name__ == '__main__':
-    tracks_base_folder = r"Z:\dets\georeferenced_tracks"
+    tracks_base_folder = r"Z:\dets\georeferenced_testing_around"
     detections_base_folder = r"Z:\dets\source"
     images_base_folder = r"Z:\sequences"
-    target_base_folder = r"Z:\sequences_drawn"
+    target_base_folder = r"Z:\dets\georeferenced_testing_around\drawn"
+    create_video = True
+    delete_images_after_video_creation = True
 
     os.makedirs(target_base_folder, exist_ok=True)
 
@@ -60,6 +64,8 @@ if __name__ == '__main__':
     # Collect track files (remove the previous one-sequence filter)
     for root, dirs, files in os.walk(tracks_base_folder):
         for file in files:
+            if file != "14_1.csv":
+                continue
             if file.endswith(".csv") and "_" in file:
                 full_file_path = os.path.join(root, file)
                 p = Path(full_file_path)
@@ -83,6 +89,7 @@ if __name__ == '__main__':
             if key in track_files:
                 image_folders[key] = full_dir_path
 
+    videowriter = FFMPEGWriter()
     for key, tracks_csv in track_files.items():
         # 1) Read track-to-frame mapping (frame -> list of (row_idx_in_dets, track_id))
         sequence_tracks = defaultdict(list)
@@ -91,7 +98,11 @@ if __name__ == '__main__':
             for row_idx, row in enumerate(reader):
                 frame = row[0]
                 tid = int(row[1])
-                sequence_tracks[frame].append((row_idx, tid))
+                coordinates = row[2:-2]
+                sequence_tracks[frame].append((row_idx, tid, coordinates))
+
+        if len(sequence_tracks) == 0:
+            continue
 
         # 2) Read detections into a list (the track rows refer to indices here)
         det_path = detection_files.get(key)
@@ -105,15 +116,17 @@ if __name__ == '__main__':
                     if idx == 0:
                         continue  # skip header if present
                     parts = line.split()
-                    if len(parts) < 7:
+                    if len(parts) < 8:
                         continue
-                    frame = parts[0]
-                    x1 = float(parts[1])
-                    y1 = float(parts[2])
-                    x2 = float(parts[3])
-                    y2 = float(parts[4])
-                    confidence = float(parts[5])
-                    class_id = int(parts[6])
+                    orig_id = parts[0]
+                    frame = parts[1]
+                    x1 = float(parts[2])
+                    y1 = float(parts[3])
+                    x2 = float(parts[4])
+                    y2 = float(parts[5])
+                    confidence = float(parts[6])
+                    class_id = int(parts[7])
+                    # todo orig_id
                     dets.append((frame, x1, y1, x2, y2, confidence, class_id))
 
         # 3) Iterate **all images** in the sequence folder
@@ -124,23 +137,26 @@ if __name__ == '__main__':
 
         # Build/ensure target folder that mirrors the source structure
         # We'll compute the subfolder per image (handles deviating folders)
+        target_image_files = []
+        current_sub_folder = None
         for img_file in sorted(Path(img_dir).glob("*.jpg")):
             frame_id = img_file.stem
 
             image_path = str(img_file)
-            current_sub_folder = deviating_folders(images_base_folder, image_path)
+            if current_sub_folder is None:
+                current_sub_folder = deviating_folders(images_base_folder, image_path)
             image = cv2.imread(image_path, cv2.IMREAD_COLOR)
             if image is None:
                 continue
 
             # Draw boxes only if we have tracks for this frame
             if frame_id in sequence_tracks and dets:
-                for row_idx, track_id in sequence_tracks[frame_id]:
+                for row_idx, track_id, _ in sequence_tracks[frame_id]:
                     if 0 <= row_idx < len(dets):
                         _, x1, y1, x2, y2, confidence, _ = dets[row_idx]
                         color = id_to_color(track_id)
 
-                        if confidence < 0:
+                        if confidence >= 0:
                             cv2.rectangle(
                                 image,
                                 (int(x1), int(y1)),
@@ -152,5 +168,17 @@ if __name__ == '__main__':
                             draw_dashed_rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), color, 2, 15)
 
             image_target_folder = os.path.join(target_base_folder, Path(current_sub_folder))
+            image_target_file = os.path.join(image_target_folder, frame_id + ".jpg")
+            target_image_files.append(image_target_file)
             os.makedirs(image_target_folder, exist_ok=True)
-            cv2.imwrite(os.path.join(image_target_folder, frame_id + ".jpg"), image)
+            cv2.imwrite(image_target_file, image)
+
+        if create_video and len(target_image_files) > 0 and current_sub_folder is not None:
+            video_path = os.path.join(target_base_folder, Path(current_sub_folder), "video.mp4")
+            gen = ((idx, cv2.imread(x)) for (idx, x) in enumerate(target_image_files))
+            videowriter.write(video_path, gen)
+            print(f"Created video {video_path}")
+            if delete_images_after_video_creation:
+                for target_image_file in target_image_files:
+                    os.remove(target_image_file)
+        print(f"Finished {tracks_csv}")

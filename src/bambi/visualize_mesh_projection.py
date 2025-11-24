@@ -306,7 +306,7 @@ def main():
     print("Mesh AABB center:", center)
 
     # 2) Extract submesh in a defined AABB (edit sizes as needed)
-    size_xyz = (500.0, 500.0, 180.0)
+    size_xyz = (300.0, 300.0, 180.0)
     submesh = extract_submesh_aabb(mesh, center, size_xyz)
     # submesh = mesh
     mins, maxs = submesh.bounds
@@ -454,7 +454,7 @@ def main():
     P = perspective_from_fov(fovy_deg=fov_y_deg, aspect=aspect,
                              z_near=diag * 1e-3, z_far=diag * 10.0)
 
-    target_faces = 50000
+    target_faces = 5000
     mesh_simplified = submesh.simplify_quadratic_decimation(target_faces)
     mask_inside_simpl = select_faces_inside_frustum(mesh_simplified, planes)
     export_scene_svg(
