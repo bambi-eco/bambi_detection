@@ -16,6 +16,9 @@ from src.bambi.georeference_deepsort_mot import deviating_folders  # :contentRef
 from collections import defaultdict
 import math
 
+from src.bambi.video.video_writer import FFMPEGWriter
+
+
 def build_sequence_tracks_from_results(results):
     """
     results: list of (frame, tid, Detection) from gt.track_detections()
@@ -471,6 +474,15 @@ if __name__ == "__main__":
     window_length = 11
     polyorder = 2
 
+    target_base_folder = r"Z:\dets\georeferenced5\drawn"
+    create_video = True
+    delete_images_after_video_creation = True
+
+    if create_video:
+        videowriter = FFMPEGWriter()
+    else:
+        videowriter = None
+
     # Load global additional corrections once
     all_additional_corrections = {}
     if os.path.exists(additional_corrections_path):
@@ -611,6 +623,7 @@ if __name__ == "__main__":
         # For overlay text
         current_sub_folder = deviating_folders(images_base_folder, str(image_files[0]))
 
+        target_image_files = []
         # --- Play frames live ---
         for img_file in image_files:
             frame_id = img_file.stem  # e.g. "00000001"
@@ -790,5 +803,20 @@ if __name__ == "__main__":
                 if key2 == ord("n"):
                     break
 
+            if create_video:
+                image_target_folder = os.path.join(target_base_folder, Path(current_sub_folder))
+                image_target_file = os.path.join(image_target_folder, frame_id + ".jpg")
+                target_image_files.append(image_target_file)
+                os.makedirs(image_target_folder, exist_ok=True)
+                cv2.imwrite(image_target_file, combined)
+
+        if create_video and len(target_image_files) > 0 and current_sub_folder is not None:
+            video_path = os.path.join(target_base_folder, Path(current_sub_folder), "video.mp4")
+            gen = ((idx, cv2.imread(x)) for (idx, x) in enumerate(target_image_files))
+            videowriter.write(video_path, gen)
+            print(f"Created video {video_path}")
+            if delete_images_after_video_creation:
+                for target_image_file in target_image_files:
+                    os.remove(target_image_file)
     cv2.destroyAllWindows()
     print("Done.")
