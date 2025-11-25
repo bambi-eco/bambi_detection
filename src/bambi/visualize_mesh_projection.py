@@ -19,6 +19,97 @@ except Exception:
 import numpy as np
 import svgwrite
 
+def create_camera(eye, target, mesh, scene, ray, trimmed_edges, planes, points_above, color=(255, 0, 0, 255)):
+    points_above.append(eye)
+    up = np.array([0.0, 1.0, 0.0])
+    V = look_at(eye, target, up)
+
+    # Frustum params (edit as you like)
+    fovy_deg = 40.0
+    aspect = 16.0 / 9.0
+    z_near = 1.0
+    z_far = 1000.0
+    P = perspective(fovy_deg, aspect, z_near, z_far)
+
+    local_planes = frustum_planes_from_matrices(V, P)
+    planes.extend(local_planes)
+
+    # 5) Find faces inside the frustum (by centroid) and color them red
+    mask_inside = select_faces_inside_frustum(mesh, local_planes)
+    colorize_faces(mesh, mask_inside, color_inside=color, color_outside=(180, 180, 180, 255))
+
+    # Also color the AABB submesh differently to show the crop (optional)
+    # if len(submesh.faces) > 0:
+    #     submesh.visual.face_colors = np.tile([0, 255, 0, 140], (len(submesh.faces), 1))  # translucent green
+
+    # 6) Visualize
+    # Option A: quick viewer via trimesh
+
+    # Add tiny spheres for the two points: center and point_above
+    radius = mesh.scale * 0.005 if mesh.scale > 0 else 1.0
+    sphere_center = trimesh.creation.icosphere(radius=radius)
+    sphere_center.apply_translation(target)
+    # sphere_center.visual.face_colors = [0, 0, 255, 255]
+    # scene.add_geometry(sphere_center)
+
+    sphere_above = sphere_center.copy()
+    sphere_above.apply_translation(eye - target)
+    sphere_above.visual.face_colors = [0, 0, 0, 255]
+    scene.add_geometry(sphere_above)
+
+    # Optional: draw a simple frustum wireframe for reference
+    def frustum_corners_world(eye, target, up, fovy, aspect, z_near, z_far):
+        V = look_at(eye, target, up)
+        # Build camera basis
+        # Inverse view to get camera axes in world:
+        Vinv = np.linalg.inv(V)
+        cam_pos = Vinv[:3, 3]
+        cam_x = Vinv[:3, 0]
+        cam_y = Vinv[:3, 1]
+        cam_z = -Vinv[:3, 2]  # forward
+
+        def plane_corners(z):
+            h = 2 * z * np.tan(np.radians(fovy) / 2)
+            w = h * aspect
+            c = cam_pos + cam_z * z
+            dx = cam_x * (w / 2)
+            dy = cam_y * (h / 2)
+            return np.array([
+                c - dx - dy,
+                c + dx - dy,
+                c + dx + dy,
+                c - dx + dy
+            ])
+
+        n4 = plane_corners(z_near)
+        f4 = plane_corners(z_far)
+        return n4, f4
+
+    n4, f4 = frustum_corners_world(eye, target, up, fovy_deg, aspect, z_near, z_far)
+    frustum_pts = np.vstack([n4, f4])
+    # Lines between corners
+    # lines = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
+    lines = [(0, 4), (1, 5), (2, 6), (3, 7)]
+
+    # pick a visible radius based on model size
+    mins, maxs = mesh.bounds
+    diag = float(np.linalg.norm(maxs - mins)) or 1.0
+    edge_radius = diag * 0.002  # adjust if too thin/thick
+
+    for i, j in lines:
+        p0, p1 = frustum_pts[i], frustum_pts[j]
+        q0, q1 = shorten_to_mesh_robust(ray, p0, p1)
+
+        if np.linalg.norm(q1 - q0) < 1e-6:
+            continue
+
+        tube = cylinder_between(q0, q1, radius=edge_radius, sections=20)
+        if tube is None:
+            continue
+        tube.visual.face_colors = [0, 0, 0, 255]
+        scene.add_geometry(tube)
+        trimmed_edges.append((q0, q1))
+
 def project_points(points, V, P, W=1280, H=720):
     """Project Nx3 points with view (V) + projection (P) to pixel coords (W,H)."""
     N = points.shape[0]
@@ -43,9 +134,9 @@ def draw_point_circle(dwg, point_world, V, P, W, H, radius_px=8, color="black"):
                        stroke=color,
                        stroke_width=1))
 
-def export_scene_svg(mesh, face_mask_inside, frustum_lines, V, P,
+def export_scene_svg(mesh, face_masks_inside, frustum_lines, V, P,
                      trimmed_edges=None,  # list of (q0,q1) 3D; optional
-                     point_above=None,
+                     points_above=None,
                      W=1280, H=720, out_path="scene.svg"):
     """
     - mesh: trimesh.Trimesh
@@ -68,17 +159,19 @@ def export_scene_svg(mesh, face_mask_inside, frustum_lines, V, P,
         tri = Verts[F[fi]]
         pts2d, _ = project_points(tri, V, P, W, H)
         pts = [(float(pts2d[k,0]), float(pts2d[k,1])) for k in range(3)]
-        inside = bool(face_mask_inside[fi]) if face_mask_inside is not None else False
-        fill = svgwrite.rgb(255, 0, 0) if inside else "none"
-        fill_opacity = 0.6 if inside else 0.0
-        stroke = svgwrite.rgb(200, 200, 200)
-        dwg.add(dwg.polygon(points=pts, fill=fill, fill_opacity=fill_opacity,
-                            stroke=stroke, stroke_width=0.6))
+        for (face_mask_inside, color) in face_masks_inside:
+            inside = bool(face_mask_inside[fi]) if face_mask_inside is not None else False
+            fill = svgwrite.rgb(color[0], color[1], color[2]) if inside else "none"
+            fill_opacity = 0.6 if inside else 0.0
+            stroke = svgwrite.rgb(200, 200, 200)
+            dwg.add(dwg.polygon(points=pts, fill=fill, fill_opacity=fill_opacity,
+                                stroke=stroke, stroke_width=0.6))
 
-    if point_above is not None:
-        draw_point_circle(dwg, point_above, V, P, W, H,
-                          radius_px=8,
-                          color="black")
+    if points_above is not None:
+        for point_above in points_above:
+            draw_point_circle(dwg, point_above, V, P, W, H,
+                              radius_px=8,
+                              color="black")
 
     # ---- draw frustum edges (cyan)
     edge_color = svgwrite.rgb(0, 0, 0)
@@ -241,7 +334,7 @@ def colorize_faces(mesh: trimesh.Trimesh, face_mask: np.ndarray, color_inside=(2
     """Assigns per-face colors (in-place)."""
     if mesh.visual.face_colors is None or len(mesh.visual.face_colors) != len(mesh.faces):
         mesh.visual.face_colors = np.tile(color_outside, (len(mesh.faces), 1))
-    mesh.visual.face_colors[:] = color_outside
+    # mesh.visual.face_colors[:] = color_outside
     mesh.visual.face_colors[face_mask] = color_inside
 
 # 2) Robust segment trimming using ALL hits on p0 -> p1
@@ -315,106 +408,24 @@ def main():
 
     ray = RayMeshIntersector(submesh)
 
-
-    # 3) A point 10 units along +Z from the center
-    point_above = center + np.array([0.0, 0.0, 10.0])
-    print("Point +10 on Z from center:", point_above)
-
-    # 4) Build a camera frustum from this point looking toward the mesh center
-    eye = point_above
-    target = center
-    up = np.array([0.0, 1.0, 0.0])
-    V = look_at(eye, target, up)
-
-    # Frustum params (edit as you like)
-    fovy_deg = 60.0
-    aspect = 16.0 / 9.0
-    z_near = 1.0
-    z_far = 1000.0
-    P = perspective(fovy_deg, aspect, z_near, z_far)
-
-    planes = frustum_planes_from_matrices(V, P)
-
-    # 5) Find faces inside the frustum (by centroid) and color them red
-    mask_inside = select_faces_inside_frustum(submesh, planes)
-    colorize_faces(submesh, mask_inside, color_inside=(255, 0, 0, 255), color_outside=(180, 180, 180, 255))
-
-    # Also color the AABB submesh differently to show the crop (optional)
-    # if len(submesh.faces) > 0:
-    #     submesh.visual.face_colors = np.tile([0, 255, 0, 140], (len(submesh.faces), 1))  # translucent green
-
-    # 6) Visualize
-    # Option A: quick viewer via trimesh
     scene = trimesh.Scene()
     # scene.add_geometry(mesh)
     if len(submesh.faces) > 0:
         scene.add_geometry(submesh)
 
-    # Add tiny spheres for the two points: center and point_above
-    radius = submesh.scale * 0.005 if submesh.scale > 0 else 1.0
-    sphere_center = trimesh.creation.icosphere(radius=radius)
-    sphere_center.apply_translation(center)
-    # sphere_center.visual.face_colors = [0, 0, 255, 255]
-    # scene.add_geometry(sphere_center)
 
-    sphere_above = sphere_center.copy()
-    sphere_above.apply_translation(point_above - center)
-    sphere_above.visual.face_colors = [0, 0, 0, 255]
-    scene.add_geometry(sphere_above)
-
-    # Optional: draw a simple frustum wireframe for reference
-    def frustum_corners_world(eye, target, up, fovy, aspect, z_near, z_far):
-        V = look_at(eye, target, up)
-        # Build camera basis
-        # Inverse view to get camera axes in world:
-        Vinv = np.linalg.inv(V)
-        cam_pos = Vinv[:3, 3]
-        cam_x = Vinv[:3, 0]
-        cam_y = Vinv[:3, 1]
-        cam_z = -Vinv[:3, 2]  # forward
-
-        def plane_corners(z):
-            h = 2 * z * np.tan(np.radians(fovy) / 2)
-            w = h * aspect
-            c = cam_pos + cam_z * z
-            dx = cam_x * (w / 2)
-            dy = cam_y * (h / 2)
-            return np.array([
-                c - dx - dy,
-                c + dx - dy,
-                c + dx + dy,
-                c - dx + dy
-            ])
-
-        n4 = plane_corners(z_near)
-        f4 = plane_corners(z_far)
-        return n4, f4
-
-    n4, f4 = frustum_corners_world(eye, target, up, fovy_deg, aspect, z_near, z_far)
-    frustum_pts = np.vstack([n4, f4])
-    # Lines between corners
-    # lines = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)]
-    lines = [(0, 4), (1, 5), (2, 6), (3, 7)]
-
-    # pick a visible radius based on model size
-    mins, maxs = submesh.bounds
-    diag = float(np.linalg.norm(maxs - mins)) or 1.0
-    edge_radius = diag * 0.002  # adjust if too thin/thick
     trimmed_edges = []
-
-    for i, j in lines:
-        p0, p1 = frustum_pts[i], frustum_pts[j]
-        q0, q1 = shorten_to_mesh_robust(ray, p0, p1)
-
-        if np.linalg.norm(q1 - q0) < 1e-6:
-            continue
-
-        tube = cylinder_between(q0, q1, radius=edge_radius, sections=20)
-        if tube is None:
-            continue
-        tube.visual.face_colors = [0, 0, 0, 255]
-        scene.add_geometry(tube)
-        trimmed_edges.append((q0, q1))
+    planes1 = []
+    planes2 = []
+    planes3 = []
+    points_above = []
+    # 4) Build a camera frustum from this point looking toward the mesh center
+    create_camera(center - np.array([20.0, 0.0, 0.0]) + np.array([0.0, 0.0, 10.0]), center - np.array([20.0, 0.0, 0.0]), submesh, scene, ray, trimmed_edges, planes1, points_above,(0, 255, 0, 255))
+    create_camera(center + np.array([0.0, 0.0, 10.0]), center, submesh, scene, ray, trimmed_edges, planes2, points_above,(255, 0, 0, 255))
+    create_camera(center + np.array([20.0, 0.0, 0.0]) + np.array([0.0, 0.0, 10.0]), center + np.array([20.0, 0.0, 0.0]), submesh, scene, ray, trimmed_edges, planes3, points_above,(0, 0, 255, 255))
+    planes1 = np.array(planes1)
+    planes2 = np.array(planes2)
+    planes3 = np.array(planes3)
 
     W, H = 1920, 1080
     fov_y_deg = 60.0  # initial; you can change it in the viewer with scroll/zoom
@@ -456,15 +467,19 @@ def main():
 
     target_faces = 5000
     mesh_simplified = submesh.simplify_quadratic_decimation(target_faces)
-    mask_inside_simpl = select_faces_inside_frustum(mesh_simplified, planes)
+    mask_inside_simpl1 = select_faces_inside_frustum(mesh_simplified, planes1)
+    mask_inside_simpl2 = select_faces_inside_frustum(mesh_simplified, planes2)
+    mask_inside_simpl3 = select_faces_inside_frustum(mesh_simplified, planes3)
     export_scene_svg(
         mesh=mesh_simplified,
-        face_mask_inside=mask_inside_simpl,  # or None if you just want outlines
+        face_masks_inside=[(mask_inside_simpl1, (0, 255, 0, 255)),
+                          (mask_inside_simpl2, (255, 0, 0, 255)),
+                          (mask_inside_simpl3, (0, 0, 255, 255))],  # or None if you just want outlines
         frustum_lines=[],  # unused if trimmed_edges provided
         trimmed_edges=trimmed_edges,  # draw your cyan tubes in 2D as lines
         V=V, P=P,
         W=W, H=H,
-        point_above=point_above,
+        points_above=points_above,
         out_path="scene.svg"
     )
     print("SVG written to scene.svg using the final interactive camera.")

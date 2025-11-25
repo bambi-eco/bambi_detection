@@ -223,8 +223,8 @@ if __name__ == '__main__':
                 os.makedirs(target_folder, exist_ok=True)
                 os.makedirs(target_folder + "_reprojected", exist_ok=True) # todo remove
                 with (open(f, "r", encoding="utf-8") as source,
-                      open(os.path.join(target_folder, p.name), "w", encoding="utf-8") as target,
-                      open(os.path.join(target_folder + "_reprojected", p.name), "w", encoding="utf-8") as target2): # todo remove
+                      open(os.path.join(target_folder, p.name), "w", encoding="utf-8") as target):#,
+                      # open(os.path.join(target_folder + "_reprojected", p.name), "w", encoding="utf-8") as target2): # todo remove
                     frame_labels = []
                     for idx, line in enumerate(source):
                         if idx == 0:
@@ -288,20 +288,20 @@ if __name__ == '__main__':
                             target.write(f"{idx} {frame} {min_x} {min_y} {min_z} {max_x} {max_y} {max_z} {confidence} {class_id}\n")
 
                             # todo remove - start
-                            pixel_coords = world_to_pixel_coord2(xx, yy, zz, input_resolution.width,
-                                                                 input_resolution.height, camera)
-                            xs = [p[0] if p is not None else -1 for p in pixel_coords]
-                            ys = [p[1] if p is not None else -1 for p in pixel_coords]
-                            try:
-                                minx = min(xs)
-                                maxx = max(xs)
-                                miny = min(ys)
-                                maxy = max(ys)
-                                target2.write(
-                                    f"{idx} {frame} {minx} {miny} {maxx} {maxy} {confidence} {class_id}\n")
-                            except Exception:
-                                target2.write(
-                                    f"{idx} {frame} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
+                            # pixel_coords = world_to_pixel_coord2(xx, yy, zz, input_resolution.width,
+                            #                                      input_resolution.height, camera)
+                            # xs = [p[0] if p is not None else -1 for p in pixel_coords]
+                            # ys = [p[1] if p is not None else -1 for p in pixel_coords]
+                            # try:
+                            #     minx = min(xs)
+                            #     maxx = max(xs)
+                            #     miny = min(ys)
+                            #     maxy = max(ys)
+                            #     target2.write(
+                            #         f"{idx} {frame} {minx} {miny} {maxx} {maxy} {confidence} {class_id}\n")
+                            # except Exception:
+                            #     target2.write(
+                            #         f"{idx} {frame} {-1} {-1} {-1} {-1} {confidence} {class_id}\n")
                             # todo remove - end
                         else:
                             target.write(f"{idx} {frame} {-1} {-1} {-1} {-1} {-1} {-1} {-1} {class_id}\n")

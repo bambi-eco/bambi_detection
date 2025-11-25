@@ -474,9 +474,14 @@ if __name__ == "__main__":
     window_length = 11
     polyorder = 2
 
+    show_live = True
+    skip_existing = True
     target_base_folder = r"Z:\dets\georeferenced5\drawn"
     create_video = True
     delete_images_after_video_creation = True
+
+    if not show_live and not create_video:
+        raise Exception("Nothing to do")
 
     if create_video:
         videowriter = FFMPEGWriter()
@@ -499,10 +504,14 @@ if __name__ == "__main__":
         for file in files:
             if not file.endswith(".txt"):
                 continue
-            if not file.startswith("14_1"):
-                continue
+            # Z:\dets\georeferenced5\drawn\test
+
+            # if not file.startswith("14_1"):
+            #     continue
             full_file_path = os.path.join(root, file)
             p = Path(full_file_path)
+            if skip_existing and os.path.exists(os.path.join(target_base_folder, p.parent.name, p.stem)):
+                continue
             key = p.parent.name + "/" + p.stem
             track_files[key] = full_file_path
 
@@ -778,30 +787,31 @@ if __name__ == "__main__":
                 cv2.LINE_AA,
             )
 
-            cv2.imshow("Tracks (image + global)", combined)
+            if show_live:
+                cv2.imshow("Tracks (image + global)", combined)
 
-            # Controls: q/ESC = quit, n = next sequence, space = pause
-            key_press = cv2.waitKey(30) & 0xFF
-            if key_press in (ord("q"), 27):
-                cv2.destroyAllWindows()
-                raise SystemExit
-            if key_press == ord("n"):
-                print("  -> Skipping to next sequence.")
-                break
-            if key_press == ord(" "):
-                # pause until space / n / q / ESC
-                while True:
-                    key2 = cv2.waitKey(0) & 0xFF
-                    if key2 in (ord("q"), 27):
-                        cv2.destroyAllWindows()
-                        raise SystemExit
-                    if key2 == ord("n"):
-                        print("  -> Skipping to next sequence.")
-                        break
-                    if key2 == ord(" "):
-                        break
-                if key2 == ord("n"):
+                # Controls: q/ESC = quit, n = next sequence, space = pause
+                key_press = cv2.waitKey(30) & 0xFF
+                if key_press in (ord("q"), 27):
+                    cv2.destroyAllWindows()
+                    raise SystemExit
+                if key_press == ord("n"):
+                    print("  -> Skipping to next sequence.")
                     break
+                if key_press == ord(" "):
+                    # pause until space / n / q / ESC
+                    while True:
+                        key2 = cv2.waitKey(0) & 0xFF
+                        if key2 in (ord("q"), 27):
+                            cv2.destroyAllWindows()
+                            raise SystemExit
+                        if key2 == ord("n"):
+                            print("  -> Skipping to next sequence.")
+                            break
+                        if key2 == ord(" "):
+                            break
+                    if key2 == ord("n"):
+                        break
 
             if create_video:
                 image_target_folder = os.path.join(target_base_folder, Path(current_sub_folder))
@@ -811,7 +821,8 @@ if __name__ == "__main__":
                 cv2.imwrite(image_target_file, combined)
 
         if create_video and len(target_image_files) > 0 and current_sub_folder is not None:
-            video_path = os.path.join(target_base_folder, Path(current_sub_folder), "video.mp4")
+            p = Path(georef_txt_path)
+            video_path = os.path.join(target_base_folder, Path(current_sub_folder), f"{p.stem}.mp4")
             gen = ((idx, cv2.imread(x)) for (idx, x) in enumerate(target_image_files))
             videowriter.write(video_path, gen)
             print(f"Created video {video_path}")
