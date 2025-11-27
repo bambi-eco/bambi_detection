@@ -477,7 +477,7 @@ if __name__ == "__main__":
     show_live = True
     skip_existing = False
     target_base_folder = r"Z:\dets\georeferenced5\drawn2"
-    create_video = False
+    create_video = True
     delete_images_after_video_creation = True
 
     if not show_live and not create_video:
@@ -642,6 +642,15 @@ if __name__ == "__main__":
             max_x = max(max_x, max(dx))
             min_y = min(min_y, min(dy))
             max_y = max(max_y, max(dy))
+
+            length = max_x - min_x
+            height = max_y - min_y
+
+            if length > height:
+                max_y = min_y + length
+            else:
+                max_x = min_x + height
+
             global_extent = (min_x, max_x, min_y, max_y)
 
         canvas_cfg = make_global_canvas(global_extent)
