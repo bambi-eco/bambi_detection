@@ -606,8 +606,8 @@ def write_tracks_csv(results: List[Tuple[int, int, Detection]], out_path: str):
 
 if __name__ == '__main__':
     # Paths
-    base_dir = r"Z:\dets\georeferenced_smoothed"
-    target_dir = r"Z:\dets\georeferenced_testing_around"
+    base_dir = r"Z:\dets\georeferenced5"
+    target_dir = r"Z:\dets\georeferenced5_testing_around"
     iou_thresh = 0.3
     class_aware = True
     max_age = -1

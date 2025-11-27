@@ -463,7 +463,7 @@ if __name__ == "__main__":
     iou_thresh = 0.3
     class_aware = True
     max_age = -1
-    minimum_confidence = 0.0
+    minimum_confidence = 0.3
     tracker = gt.TrackerMode.HUNGARIAN
     max_center_distance = 0.2 #only used with TrackerMode.CENTER or TrackerMode.HUNGARIAN_CENTER
 
@@ -475,13 +475,25 @@ if __name__ == "__main__":
     polyorder = 2
 
     show_live = True
-    skip_existing = True
-    target_base_folder = r"Z:\dets\georeferenced5\drawn"
-    create_video = True
+    skip_existing = False
+    target_base_folder = r"Z:\dets\georeferenced5\drawn2"
+    create_video = False
     delete_images_after_video_creation = True
 
     if not show_live and not create_video:
         raise Exception("Nothing to do")
+
+    config = {
+        "iou_thresh": iou_thresh,
+        "class_aware": class_aware,
+        "max_age": max_age,
+        "minimum_confidence": minimum_confidence,
+        "tracker": str(tracker),
+        "max_center_distance": max_center_distance,
+        "apply_pose_smoothing": apply_pose_smoothing,
+        "window_length": window_length,
+        "polyorder": polyorder
+    }
 
     if create_video:
         videowriter = FFMPEGWriter()
@@ -506,8 +518,8 @@ if __name__ == "__main__":
                 continue
             # Z:\dets\georeferenced5\drawn\test
 
-            # if not file.startswith("14_1"):
-            #     continue
+            if not file.startswith("26_3"):
+                continue
             full_file_path = os.path.join(root, file)
             p = Path(full_file_path)
             if skip_existing and os.path.exists(os.path.join(target_base_folder, p.parent.name, p.stem)):
@@ -550,6 +562,13 @@ if __name__ == "__main__":
             max_center_distance=max_center_distance,
             min_confidence=minimum_confidence,
         )
+
+        cnt_tracks = defaultdict(int)
+        for sequence_track in sequence_tracks.values():
+            for entry in sequence_track:
+                cnt_tracks[entry["tid"]] += 1
+        config["tracks"] = cnt_tracks
+
         if not sequence_tracks or global_extent is None:
             print("  No tracks, skipping.")
             continue
@@ -602,7 +621,7 @@ if __name__ == "__main__":
         # 4) Precompute drone positions for the frames we care about
         drone_positions = load_drone_positions_for_sequence(
             parent_id=flight_id,
-            frame_ids_for_sequence=frames_in_sequence,
+            frame_ids_for_sequence=[img.stem for img in image_files],
             correction_folder=correction_folder,
             additional_corrections_for_parent=additional_corr_for_parent,
             apply_pose_smoothing=apply_pose_smoothing,
@@ -821,6 +840,8 @@ if __name__ == "__main__":
                 cv2.imwrite(image_target_file, combined)
 
         if create_video and len(target_image_files) > 0 and current_sub_folder is not None:
+            with open(os.path.join(target_base_folder, Path(current_sub_folder), "config.json"), "w") as config_file:
+                json.dump(config, config_file)
             p = Path(georef_txt_path)
             video_path = os.path.join(target_base_folder, Path(current_sub_folder), f"{p.stem}.mp4")
             gen = ((idx, cv2.imread(x)) for (idx, x) in enumerate(target_image_files))
