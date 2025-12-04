@@ -781,8 +781,8 @@ class MapTileProvider:
         canvas[margin:margin + content_height, margin:margin + content_width] = resized
 
         # Flip vertically because our world_to_canvas flips Y
-        canvas[margin:margin + content_height, margin:margin + content_width] = \
-            cv2.flip(resized, 0)
+        # canvas[margin:margin + content_height, margin:margin + content_width] = \
+        #     cv2.flip(resized, 0)
 
         return canvas
 
@@ -874,10 +874,10 @@ if __name__ == "__main__":
     map_darken_factor = 0.4  # Darken map for better overlay visibility (0-1, lower = darker)
     # Tile server options - uncomment the one you want to use:
     # map_tile_url = None  # Default: OpenStreetMap
-    map_tile_url = MapTileProvider.OPENSTREETMAP  # Standard map view
+    # map_tile_url = MapTileProvider.OPENSTREETMAP  # Standard map view
     # map_tile_url = MapTileProvider.CARTO_DARK  # Dark themed map (good for bright overlays)
     # map_tile_url = MapTileProvider.CARTO_LIGHT  # Light themed map
-    # map_tile_url = MapTileProvider.ESRI_SATELLITE  # Satellite imagery (free, no API key)
+    map_tile_url = MapTileProvider.ESRI_SATELLITE  # Satellite imagery (free, no API key)
     # map_tile_url = MapTileProvider.GOOGLE_SATELLITE  # Google satellite (may violate ToS)
 
     if not show_live and not create_video:
