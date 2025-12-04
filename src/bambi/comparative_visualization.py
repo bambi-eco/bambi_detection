@@ -34,9 +34,9 @@ from src.bambi.video.video_writer import FFMPEGWriter
 DEFAULT_TRACKING_RESULTS_BASE = r"Z:\ablation"
 DEFAULT_SEQUENCES_BASE = r"Z:\sequences"
 DEFAULT_OUTPUT_BASE = r"Z:\ablation_visualization"
-DEFAULT_MAX_COLS = 4
+DEFAULT_MAX_COLS = 3
 DEFAULT_SCALE = 1.0
-DEFAULT_SEQUENCES = ["0_1"]  # Set to list like ["0_1", "0_2"] to filter, or None for all
+DEFAULT_SEQUENCES = ["26_3"]  # Set to list like ["0_1", "0_2"] to filter, or None for all
 DEFAULT_CREATE_VIDEO = True  # Set to True to create videos
 DEFAULT_DELETE_IMAGES_AFTER_VIDEO = False  # Set to True to delete images after video creation
 # ============================================================
@@ -385,7 +385,7 @@ def process_sequence(
         color_palette: Dict[int, Tuple[int, int, int]],
         max_cols: int = 4,
         scale_factor: float = 1.0,
-        create_video: bool = False,
+        videowriter: Optional[FFMPEGWriter] = None,
         delete_images_after_video: bool = False
 ) -> None:
     """
@@ -481,30 +481,26 @@ def process_sequence(
         output_image_paths.append(output_path)
 
     # Create video if requested
-    if create_video and output_image_paths:
-        if FFMPEGWriter is None:
-            print(f"  Warning: FFMPEGWriter not available, skipping video creation")
-        else:
-            video_path = output_dir / f"{seq_name}.mp4"
+    if videowriter is not None and output_image_paths:
+        video_path = output_dir / f"{seq_name}.mp4"
 
-            # Sort image files to ensure correct order
-            target_image_files = sorted(output_image_paths)
+        # Sort image files to ensure correct order
+        target_image_files = sorted(output_image_paths)
 
-            videowriter = FFMPEGWriter()
-            gen = ((idx, cv2.imread(str(x))) for (idx, x) in enumerate(target_image_files))
-            videowriter.write(str(video_path), gen)
-            print(f"  Created video {video_path}")
+        gen = ((idx, cv2.imread(str(x))) for (idx, x) in enumerate(target_image_files))
+        videowriter.write(str(video_path), gen)
+        print(f"  Created video {video_path}")
 
-            # Delete images if requested
-            if delete_images_after_video:
-                for target_image_file in target_image_files:
-                    os.remove(target_image_file)
-                # Also remove the sequence directory if it's empty
-                try:
-                    seq_output_dir.rmdir()
-                except OSError:
-                    pass  # Directory not empty or other error
-                print(f"  Deleted {len(target_image_files)} image files")
+        # Delete images if requested
+        if delete_images_after_video:
+            for target_image_file in target_image_files:
+                os.remove(target_image_file)
+            # Also remove the sequence directory if it's empty
+            try:
+                seq_output_dir.rmdir()
+            except OSError:
+                pass  # Directory not empty or other error
+            print(f"  Deleted {len(target_image_files)} image files")
 
 
 def main():
@@ -648,6 +644,10 @@ Examples:
         sequences = [(name, path) for name, path in sequences if name in filter_sequences]
         print(f"  Filtered to {len(sequences)} sequences")
 
+    videowriter = None
+    if create_video:
+        videowriter = FFMPEGWriter()
+
     # Process each sequence
     print("\nProcessing sequences...")
     for seq_name, seq_path in sequences:
@@ -660,7 +660,7 @@ Examples:
             color_palette,
             max_cols=max_cols,
             scale_factor=scale,
-            create_video=create_video,
+            videowriter=videowriter,
             delete_images_after_video=delete_images_after_video
         )
 

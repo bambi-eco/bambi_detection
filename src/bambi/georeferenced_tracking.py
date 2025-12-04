@@ -24,6 +24,8 @@ class Detection:
     z2: float
     conf: float
     cls: int
+    interpolated: int = 0  # 0 = original detection, 1 = interpolated
+
 
 @dataclass
 class Track:
@@ -36,14 +38,16 @@ class Track:
     y2: float
     z2: float
     last_frame: int
-    age: int = 0      # number of consecutive frames not matched
-    hits: int = 0     # number of total matches
+    age: int = 0  # number of consecutive frames not matched
+    hits: int = 0  # number of total matches
+
 
 class TrackerMode(Enum):
     GREEDY = 1
     HUNGARIAN = 2
     CENTER = 3
     HUNGARIAN_CENTER = 4
+
 
 def _bbox_iou(a, b) -> float:
     ax1, ay1, ax2, ay2 = a
@@ -59,24 +63,28 @@ def _bbox_iou(a, b) -> float:
     denom = a_area + b_area - inter
     return inter / denom if denom > 0 else 0.0
 
+
 def _center(b):
     x1, y1, x2, y2 = b
-    return (0.5*(x1+x2), 0.5*(y1+y2))
+    return (0.5 * (x1 + x2), 0.5 * (y1 + y2))
+
 
 def _diag(b):
     x1, y1, x2, y2 = b
     return math.hypot(x2 - x1, y2 - y1)
 
+
 def _bbox(d):
     return (d.x1, d.y1, d.x2, d.y2)
 
+
 def postprocess_merge_fragments(
-    results: List[Tuple[int, int, object]],
-    min_len: int = 4,           # minimum frames to be considered a valid track
-    max_gap: int = 2,           # allow stitching across gaps up to this many frames
-    min_iou: float = 0.5,       # IOU threshold for stitching
-    max_center_ratio: float = 0.5,  # allow stitching if center distance <= ratio * avg diagonal
-    class_aware: bool = True    # only stitch tracks with same class_id
+        results: List[Tuple[int, int, object]],
+        min_len: int = 4,  # minimum frames to be considered a valid track
+        max_gap: int = 2,  # allow stitching across gaps up to this many frames
+        min_iou: float = 0.5,  # IOU threshold for stitching
+        max_center_ratio: float = 0.5,  # allow stitching if center distance <= ratio * avg diagonal
+        class_aware: bool = True  # only stitch tracks with same class_id
 ) -> List[Tuple[int, int, object]]:
     """
     Returns a *new* results list with short tracks reassigned to the closest valid track
@@ -91,7 +99,7 @@ def postprocess_merge_fragments(
 
     # Identify valid vs fragment tracks
     valid_tids = {tid for tid, seq in tracks.items() if len(seq) >= min_len}
-    frag_tids  = [tid for tid, seq in tracks.items() if len(seq) < min_len]
+    frag_tids = [tid for tid, seq in tracks.items() if len(seq) < min_len]
 
     # Precompute quick boundary info for each track
     # (first frame/box/class, last frame/box/class)
@@ -101,7 +109,7 @@ def postprocess_merge_fragments(
         f1, d1 = seq[-1]
         boundary[tid] = {
             "first_frame": f0, "first_box": _bbox(d0), "first_cls": d0.cls,
-            "last_frame":  f1, "last_box":  _bbox(d1), "last_cls":  d1.cls
+            "last_frame": f1, "last_box": _bbox(d1), "last_cls": d1.cls
         }
 
     # Helper to decide stitching between (A -> B) using boundaries:
@@ -115,17 +123,20 @@ def postprocess_merge_fragments(
             gap = b["first_frame"] - a["last_frame"]
             if gap < 0 or (gap > max_gap and max_gap > 0):
                 return None
-            box_a = a["last_box"]; box_b = b["first_box"]
+            box_a = a["last_box"];
+            box_b = b["first_box"]
         else:  # "backward": A starts after B ends, so B then A
             gap = a["first_frame"] - b["last_frame"]
             if gap < 0 or (gap > max_gap and max_gap > 0):
                 return None
-            box_a = b["last_box"]; box_b = a["first_box"]
+            box_a = b["last_box"];
+            box_b = a["first_box"]
 
         iou = _bbox_iou(box_a, box_b)
-        ca = _center(box_a); cb = _center(box_b)
-        center_dist = math.hypot(ca[0]-cb[0], ca[1]-cb[1])
-        norm = 0.5*(_diag(box_a) + _diag(box_b))
+        ca = _center(box_a);
+        cb = _center(box_b)
+        center_dist = math.hypot(ca[0] - cb[0], ca[1] - cb[1])
+        norm = 0.5 * (_diag(box_a) + _diag(box_b))
         norm = max(norm, 1e-6)
         center_ratio = center_dist / norm
 
@@ -164,7 +175,7 @@ def postprocess_merge_fragments(
                 if s is None:
                     continue
                 if (best is None) or (s["score"] < best["score"]) or \
-                   (math.isclose(s["score"], best["score"]) and s["gap"] < best["gap"]):
+                        (math.isclose(s["score"], best["score"]) and s["gap"] < best["gap"]):
                     best = s
                     best_target = vt
 
@@ -185,6 +196,89 @@ def postprocess_merge_fragments(
     # (We’ll reindex nothing; just return merged assignments.)
     new_results.sort(key=lambda r: (r[0], r[1]))
     return new_results
+
+
+def interpolate_missing_frames(
+        results: List[Tuple[int, int, Detection]]
+) -> List[Tuple[int, int, Detection]]:
+    """
+    Interpolate missing frames within each track.
+
+    For each track, if there are gaps in the frame sequence, this function
+    linearly interpolates the bounding box coordinates and z values to fill
+    in the missing frames. Interpolated detections have interpolated=1.
+
+    Args:
+        results: List of (frame_id, track_id, Detection) tuples
+
+    Returns:
+        New results list with interpolated detections inserted
+    """
+    # Group detections by track_id
+    tracks: Dict[int, List[Tuple[int, Detection]]] = defaultdict(list)
+    for frame, tid, det in results:
+        tracks[tid].append((frame, det))
+
+    # Sort each track by frame
+    for tid in tracks:
+        tracks[tid].sort(key=lambda x: x[0])
+
+    new_results: List[Tuple[int, int, Detection]] = []
+
+    for tid, track_dets in tracks.items():
+        if len(track_dets) < 2:
+            # No interpolation possible for single-detection tracks
+            for frame, det in track_dets:
+                new_results.append((frame, tid, det))
+            continue
+
+        # Process consecutive pairs and interpolate gaps
+        for i in range(len(track_dets)):
+            frame_curr, det_curr = track_dets[i]
+            new_results.append((frame_curr, tid, det_curr))
+
+            if i < len(track_dets) - 1:
+                frame_next, det_next = track_dets[i + 1]
+                gap = frame_next - frame_curr
+
+                if gap > 1:
+                    # Interpolate missing frames
+                    for j in range(1, gap):
+                        # Linear interpolation factor
+                        t = j / gap
+
+                        # Interpolate all coordinates
+                        interp_x1 = det_curr.x1 + t * (det_next.x1 - det_curr.x1)
+                        interp_y1 = det_curr.y1 + t * (det_next.y1 - det_curr.y1)
+                        interp_z1 = det_curr.z1 + t * (det_next.z1 - det_curr.z1)
+                        interp_x2 = det_curr.x2 + t * (det_next.x2 - det_curr.x2)
+                        interp_y2 = det_curr.y2 + t * (det_next.y2 - det_curr.y2)
+                        interp_z2 = det_curr.z2 + t * (det_next.z2 - det_curr.z2)
+
+                        # Interpolate confidence (or use average)
+                        interp_conf = det_curr.conf + t * (det_next.conf - det_curr.conf)
+
+                        # Create interpolated detection
+                        interp_det = Detection(
+                            source_id=det_curr.source_id,
+                            frame=frame_curr + j,
+                            x1=interp_x1,
+                            y1=interp_y1,
+                            z1=interp_z1,
+                            x2=interp_x2,
+                            y2=interp_y2,
+                            z2=interp_z2,
+                            conf=interp_conf,
+                            cls=det_curr.cls,  # Use class from previous detection
+                            interpolated=1
+                        )
+
+                        new_results.append((frame_curr + j, tid, interp_det))
+
+    # Sort by (frame, track_id) for consistent output
+    new_results.sort(key=lambda r: (r[0], r[1]))
+    return new_results
+
 
 def parse_line(line: str) -> Optional[Detection]:
     """
@@ -220,6 +314,7 @@ def parse_line(line: str) -> Optional[Detection]:
     if y2 < y1: y1, y2 = y2, y1
     return Detection(source_id, frame, x1, y1, z1, x2, y2, z2, conf, cls)
 
+
 def read_detections(path: str, min_confidence: float = 0.0) -> Dict[int, List[Detection]]:
     frames = defaultdict(list)
     with open(path, "r", encoding="utf-8") as f:
@@ -231,11 +326,14 @@ def read_detections(path: str, min_confidence: float = 0.0) -> Dict[int, List[De
                 frames[det.frame].append(det)
     return dict(frames)
 
+
 def iou(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> float:
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
-    ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+    ix1 = max(ax1, bx1);
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2);
+    iy2 = min(ay2, by2)
     iw = max(0.0, ix2 - ix1)
     ih = max(0.0, iy2 - iy1)
     inter = iw * ih
@@ -248,11 +346,12 @@ def iou(a: Tuple[float, float, float, float], b: Tuple[float, float, float, floa
         return 0.0
     return inter / denom
 
+
 def greedy_match(
-    detections: List[Detection],
-    tracks: List[Track],
-    iou_thr: float,
-    class_aware: bool
+        detections: List[Detection],
+        tracks: List[Track],
+        iou_thr: float,
+        class_aware: bool
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
     """
     Greedy assignment by descending IOU.
@@ -285,6 +384,7 @@ def greedy_match(
     unmatched_dets = [i for i in range(len(detections)) if i not in det_used]
     unmatched_trks = [i for i in range(len(tracks)) if i not in trk_used]
     return matches, unmatched_dets, unmatched_trks
+
 
 def hungarian_match(detections, tracks, iou_thr, class_aware):
     nD, nT = len(detections), len(tracks)
@@ -322,11 +422,12 @@ def hungarian_match(detections, tracks, iou_thr, class_aware):
 
     return matches, unmatched_dets, unmatched_trks
 
+
 def greedy_match_by_center_distance(
-    detections: List[Detection],
-    tracks: List[Track],
-    max_dist: float,
-    class_aware: bool
+        detections: List[Detection],
+        tracks: List[Track],
+        max_dist: float,
+        class_aware: bool
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
     """
     Greedy assignment by increasing center-point distance.
@@ -387,13 +488,14 @@ def greedy_match_by_center_distance(
 
     return matches, unmatched_dets, unmatched_trks
 
+
 def greedy_center_fallback(
-    detections: List["Detection"],
-    tracks: List["Track"],
-    unmatched_det_idxs: List[int],
-    unmatched_trk_idxs: List[int],
-    max_dist: float,
-    class_aware: bool,
+        detections: List["Detection"],
+        tracks: List["Track"],
+        unmatched_det_idxs: List[int],
+        unmatched_trk_idxs: List[int],
+        max_dist: float,
+        class_aware: bool,
 ) -> List[Tuple[int, int]]:
     """
     Greedy center-distance matching on subsets of dets & tracks.
@@ -407,12 +509,12 @@ def greedy_center_fallback(
     # precompute centers only for what we need
     det_centers = {
         di: _center([detections[di].x1, detections[di].y1,
-                        detections[di].x2, detections[di].y2])
+                     detections[di].x2, detections[di].y2])
         for di in unmatched_det_idxs
     }
     trk_centers = {
         ti: _center([tracks[ti].x1, tracks[ti].y1,
-                        tracks[ti].x2, tracks[ti].y2])
+                     tracks[ti].x2, tracks[ti].y2])
         for ti in unmatched_trk_idxs
     }
 
@@ -453,11 +555,11 @@ def greedy_center_fallback(
 # --- combined matcher -----------------------------------------------------
 
 def match_hungarian_iou_then_center(
-    detections: List["Detection"],
-    tracks: List["Track"],
-    iou_thr: float,
-    max_dist: float,
-    class_aware: bool,
+        detections: List["Detection"],
+        tracks: List["Track"],
+        iou_thr: float,
+        max_dist: float,
+        class_aware: bool,
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
     """
     Combined matching:
@@ -529,13 +631,14 @@ def match_hungarian_iou_then_center(
 
     return matches, unmatched_dets, unmatched_trks
 
+
 def track_detections(
-    frames: Dict[int, List[Detection]],
-    iou_thr: float = 0.9,
-    class_aware: bool = True,
-    max_age: int = 2,
-    tracker_mode: TrackerMode = TrackerMode.GREEDY,
-    max_center_distance: float = 10.0,
+        frames: Dict[int, List[Detection]],
+        iou_thr: float = 0.9,
+        class_aware: bool = True,
+        max_age: int = 2,
+        tracker_mode: TrackerMode = TrackerMode.GREEDY,
+        max_center_distance: float = 10.0,
 ) -> List[Tuple[int, int, Detection]]:
     """
     Run IOU-based tracking.
@@ -556,9 +659,11 @@ def track_detections(
         elif tracker_mode == TrackerMode.HUNGARIAN:
             matches, unmatched_dets, unmatched_trks = hungarian_match(dets, active_tracks, iou_thr, class_aware)
         elif tracker_mode == TrackerMode.HUNGARIAN_CENTER:
-            matches, unmatched_dets, unmatched_trks = match_hungarian_iou_then_center(dets, active_tracks, iou_thr, max_center_distance, class_aware)
+            matches, unmatched_dets, unmatched_trks = match_hungarian_iou_then_center(dets, active_tracks, iou_thr,
+                                                                                      max_center_distance, class_aware)
         else:
-            matches, unmatched_dets, unmatched_trks = greedy_match_by_center_distance(dets, active_tracks, max_center_distance, class_aware)
+            matches, unmatched_dets, unmatched_trks = greedy_match_by_center_distance(dets, active_tracks,
+                                                                                      max_center_distance, class_aware)
 
         # update matched tracks
         for di, ti in matches:
@@ -597,23 +702,26 @@ def track_detections(
     results.sort(key=lambda r: (r[0], r[1]))
     return results
 
+
 def write_tracks_csv(results: List[Tuple[int, int, Detection]], out_path: str):
     with open(out_path, "w", encoding="utf-8") as f:
-        # f.write("frame_id track_id min_x min_y max_x max_y confidence class_id\n")
+        # f.write("frame_id track_id min_x min_y max_x max_y confidence class_id interpolated\n")
         for frame, tid, d in results:
-            f.write(f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},{d.conf:.6f},{d.cls}\n")
+            f.write(
+                f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},{d.conf:.6f},{d.cls},{d.interpolated}\n")
 
 
 if __name__ == '__main__':
     # Paths
     base_dir = r"Z:\dets\georeferenced5"
-    target_dir = r"Z:\dets\georeferenced5_testing_around"
+    target_dir = r"Z:\dets\georeferenced5_interpolated"
     iou_thresh = 0.3
     class_aware = True
     max_age = -1
     minimum_confidence = 0.0
     tracker = TrackerMode.HUNGARIAN
-    max_center_distance = 0.2 #only used with TrackerMode.CENTER or TrackerMode.HUNGARIAN_CENTER
+    max_center_distance = 0.2  # only used with TrackerMode.CENTER or TrackerMode.HUNGARIAN_CENTER
+    interpolate = True  # If True, interpolate missing frames in tracks
 
     ##############################
 
@@ -648,6 +756,10 @@ if __name__ == '__main__':
                 #     max_center_ratio=0.75,  # or if centers within x × avg diag
                 #     class_aware=class_aware
                 # )
+
+                # Interpolate missing frames if enabled
+                if interpolate:
+                    results = interpolate_missing_frames(results)
 
                 tracks = defaultdict(list)
                 for r in results:
