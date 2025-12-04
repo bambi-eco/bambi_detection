@@ -322,7 +322,7 @@ if __name__ == '__main__':
         try:
             included = False
             for fidx, f in enumerate(files):
-                if f.endswith("14_1.txt"):
+                if f == "14_1.txt":
                     included = True
             if not included:
                 continue
