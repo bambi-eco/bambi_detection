@@ -249,6 +249,9 @@ def draw_axes_on_canvas(map_img, canvas_cfg, num_ticks=4):
 class MapTileProvider:
     OPENSTREETMAP = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     ESRI_SATELLITE = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+    CARTO_LIGHT = "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+    CARTO_DARK = "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+    # GOOGLE_SATELLITE = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" # may be against compliance
 
     def __init__(self, tile_url=None, cache_dir=None, utm_epsg=32633):
         self.tile_url = tile_url or self.OPENSTREETMAP
@@ -404,22 +407,48 @@ def load_drone_positions_for_sequence(parent_id, frame_ids, correction_folder,
     return drone_pos
 
 
-def load_fov_polygons(path):
+def load_fov_polygons(path, padded_extent, apply_extent=True):
+    """
+    padded_extent: (min_x, max_x, min_y, max_y)
+    """
     polys = {}
-    if not os.path.exists(path): return polys
+    if not os.path.exists(path):
+        return polys
+
+    min_x, max_x, min_y, max_y = padded_extent
+
     with open(path, "r") as f:
         for line in f:
-            if line.startswith("#") or not line.strip(): continue
+            if line.startswith("#") or not line.strip():
+                continue
+
             parts = line.split()
-            if len(parts) < 2: continue
+            if len(parts) < 2:
+                continue
+
             fid = int(parts[0])
             n = int(parts[1])
             pts = []
+
             for i in range(n):
                 idx = 2 + i * 3
                 if idx + 2 < len(parts):
-                    pts.append((float(parts[idx]), float(parts[idx + 1]), float(parts[idx + 2])))
+                    x = float(parts[idx])
+                    y = float(parts[idx + 1])
+                    z = float(parts[idx + 2])
+
+                    if apply_extent:
+                        # clamp x, y to padded_extent
+                        x_clamped = max(min_x, min(x, max_x))
+                        y_clamped = max(min_y, min(y, max_y))
+                    else:
+                        x_clamped = x
+                        y_clamped = y
+
+                    pts.append((x_clamped, y_clamped, z))
+
             polys[fid] = pts
+
     return polys
 
 
@@ -451,13 +480,16 @@ if __name__ == "__main__":
     iou_thresh = 0.3
     show_live = True
     create_video = True
+    delete_individual_frames = True
+    source_epsg = 32633
     show_map = True
     show_fov = True
 
     map_tile_url = MapTileProvider.ESRI_SATELLITE
     map_cache = r"Z:\map_tile_cache"
 
-    if create_video: writer = FFMPEGWriter()
+    if create_video:
+        writer = FFMPEGWriter()
 
     all_corrs = {}
     if os.path.exists(add_corr_path):
@@ -541,13 +573,14 @@ if __name__ == "__main__":
 
         map_bg = None
         if show_map:
-            prov = MapTileProvider(map_tile_url, map_cache)
+            prov = MapTileProvider(map_tile_url, map_cache, utm_epsg=source_epsg)
             map_bg = prov.get_map_background(padded_extent, canvas_cfg)
-            if map_bg is not None: map_bg = (map_bg * 0.4).astype(np.uint8)
+            if map_bg is not None:
+                map_bg = (map_bg * 0.4).astype(np.uint8)
 
         fov_polys = {}
         if show_fov:
-            fov_polys = load_fov_polygons(os.path.join(fov_folder, f"{flight_id}_fov_georeferenced.txt"))
+            fov_polys = load_fov_polygons(os.path.join(fov_folder, f"{flight_id}_fov_georeferenced.txt"), padded_extent)
 
         track_history = defaultdict(list)
         drone_history = []
@@ -627,13 +660,13 @@ if __name__ == "__main__":
                 cv2.circle(map_img, (dcx, dcy), 6, (0, 255, 255), -1)
 
             draw_axes_on_canvas(map_img, canvas_cfg)
-
             h_img, w_img = img_vis.shape[:2]
             h_map, w_map = map_img.shape[:2]
             scale = h_img / h_map
             map_resized = cv2.resize(map_img, (int(w_map * scale), h_img))
             combined = np.hstack([img_vis, map_resized])
 
+            cv2.putText(combined, f"EPSG: {source_epsg}", (2 * w_img - 285, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             cv2.putText(combined, f"{key} | {frame_id}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
             if show_live:
@@ -654,6 +687,8 @@ if __name__ == "__main__":
             vpath = os.path.join(out_dir, f"{Path(georef_path).stem}.mp4")
             gen = ((i, cv2.imread(f)) for i, f in enumerate(vid_frames))
             writer.write(vpath, gen)
-            for f in vid_frames: os.remove(f)
+            if delete_individual_frames:
+                for f in vid_frames:
+                    os.remove(f)
 
     cv2.destroyAllWindows()
