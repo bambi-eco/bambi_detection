@@ -45,8 +45,8 @@ def bgr_to_hex(bgr: Tuple[int, int, int]) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 if __name__ == '__main__':
-    tracks_base = r"Z:\dets\georeferenced_testing_around"
-    target_base = r"Z:\dets\georeferenced_testing_around\geojson"
+    tracks_base = r"Z:\dets\georeferenced"
+    target_base = r"Z:\dets\georeferenced\geojson"
     rel_transformer = Transformer.from_crs(CRS.from_epsg(32633), CRS.from_epsg(4326))
     transform_to_target_crs = False
     export_single_tracks = False

@@ -321,9 +321,10 @@ if __name__ == '__main__':
         tri_mesh = None
         try:
             included = False
-            for fidx, f in enumerate(files):
-                if f == "14_1.txt":
-                    included = True
+            # todo remove
+            # for fidx, f in enumerate(files):
+            #     if f == "14_1.txt":
+            #         included = True
             if not included:
                 continue
             with open(os.path.join(correction_folder, f"{parent}_dem_mesh_r2.json"), "r") as f:

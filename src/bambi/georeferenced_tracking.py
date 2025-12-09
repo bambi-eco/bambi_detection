@@ -732,8 +732,8 @@ if __name__ == '__main__':
         length = len(files)
         for file_idx, file in enumerate(files):
             # todo remove
-            if file != "14_1.txt":
-                continue
+            # if file != "14_1.txt":
+            #     continue
 
             if file.endswith(".txt") and "_" in file:
                 full_file_path = os.path.join(root, file)
