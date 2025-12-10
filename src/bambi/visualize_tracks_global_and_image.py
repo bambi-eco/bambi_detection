@@ -5,11 +5,10 @@ import os
 import requests
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Set
 
 import cv2
 import numpy as np
-from scipy.signal import savgol_filter
 from pyproj import CRS, Transformer
 
 import src.bambi.georeferenced_tracking as gt
@@ -251,7 +250,6 @@ class MapTileProvider:
     ESRI_SATELLITE = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
     CARTO_LIGHT = "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
     CARTO_DARK = "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-    # GOOGLE_SATELLITE = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}" # may be against compliance
 
     def __init__(self, tile_url=None, cache_dir=None, utm_epsg=32633):
         self.tile_url = tile_url or self.OPENSTREETMAP
@@ -463,6 +461,95 @@ def draw_fov_polygon(img, pts, cfg, color, thick=2, alpha=0.15):
 
 
 # ============================================================
+# 5. SAM POLYGON HELPERS (NEW)
+# ============================================================
+
+def load_polygons(path, is_global=False, extent=None):
+    """
+    Parses SAM polygons.
+    Local format: Label NumPoints X1 Y1 X2 Y2 ...
+    Global format: Label NumPoints X1 Y1 Z1 X2 Y2 Z2 ...
+
+    extent: (min_x, max_x, min_y, max_y) optional tuple to clamp coordinates
+    """
+    polys = []
+    if not os.path.exists(path):
+        return polys
+
+    # Unpack extent if provided
+    min_x, max_x, min_y, max_y = (None, None, None, None)
+    if extent is not None:
+        min_x, max_x, min_y, max_y = extent
+
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+
+            label = parts[0]
+            # num_points = int(parts[1])
+            coords_raw = [float(x) for x in parts[2:]]
+
+            pts = []
+            # Global has Z, Local does not. Step accordingly.
+            step = 3 if is_global else 2
+
+            for i in range(0, len(coords_raw), step):
+                if i + 1 < len(coords_raw):
+                    x = coords_raw[i]
+                    y = coords_raw[i + 1]
+
+                    # Apply clamping if extent is provided
+                    if extent is not None:
+                        x = max(min_x, min(x, max_x))
+                        y = max(min_y, min(y, max_y))
+
+                    # We ignore Z for 2D visualization
+                    pts.append((x, y))
+
+            polys.append({"label": label, "points": pts})
+
+    return polys
+
+def draw_polygons_on_image(img, polygons, color=(255, 255, 0), alpha=0.2):
+    """Draws polygons on the camera image view (local coords)."""
+    if not polygons: return
+
+    overlay = img.copy()
+    contours = []
+
+    for poly in polygons:
+        pts = np.array(poly["points"], dtype=np.int32)
+        contours.append(pts)
+
+    cv2.fillPoly(overlay, contours, color)
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+    cv2.polylines(img, contours, True, color, 1, cv2.LINE_AA)
+
+
+def draw_polygons_on_map(img, polygons, canvas_cfg, color=(255, 255, 0), alpha=0.2):
+    """Draws polygons on the map view (global coords)."""
+    if not polygons: return
+
+    overlay = img.copy()
+    contours = []
+
+    for poly in polygons:
+        # Convert UTM to Canvas pixels
+        cpts = np.array([world_to_canvas(p[0], p[1], canvas_cfg) for p in poly["points"]], dtype=np.int32)
+        contours.append(cpts)
+
+    cv2.fillPoly(overlay, contours, color)
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+    cv2.polylines(img, contours, True, color, 1, cv2.LINE_AA)
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -470,20 +557,33 @@ if __name__ == "__main__":
     # --- CONFIGURATION ---
     georef_dets_base = r"Z:\dets\georeferenced5"
     dets_base = r"Z:\dets\source"
-    img_base = r"Z:\sequences"
+
+    # Image Paths
+    img_base = r"Z:\sequences"  # Thermal Images Base
+    rgb_base = r"Z:\14_1_rgb"  # RGB Images Base
+
     target_base = r"Z:\dets\georeferenced5\drawn_interpolated"
 
     correction_folder = r"Z:\correction_data"
     add_corr_path = r"Z:\correction_data\corrections.json"
     fov_folder = r"Z:\dets\georeferenced_fov"
 
+    # New SAM Polygon Folders
+    polygons_local_folder = r"Z:\14_1_sam"
+    polygon_global_folder = r"Z:\14_1_sam_global"
+
+    # Toggles
+    show_additional_polygons = False  # Toggle for SAM visualization
+    show_rgb = False  # Toggle for RGB visualization
+
     iou_thresh = 0.3
     show_live = True
     create_video = True
-    delete_individual_frames = True
+    delete_individual_frames = False
     source_epsg = 32633
     show_map = True
     show_fov = True
+    track_ids: Optional[List[int]] = None
 
     map_tile_url = MapTileProvider.ESRI_SATELLITE
     map_cache = r"Z:\map_tile_cache"
@@ -588,13 +688,56 @@ if __name__ == "__main__":
 
         # 6. Render
         for frame_id in render_frames:
+            # Load Thermal Image
             img_vis = cv2.imread(str(img_map[frame_id]))
             if img_vis is None: continue
+
+            # Load RGB Image (Optional)
+            img_rgb_resized = None
+            if show_rgb:
+                rgb_path_candidates = [
+                    os.path.join(rgb_base, f"{frame_id}.jpg"),
+                    os.path.join(rgb_base, f"{frame_id}.png")
+                ]
+                img_rgb_raw = None
+                for p in rgb_path_candidates:
+                    if os.path.exists(p):
+                        img_rgb_raw = cv2.imread(p)
+                        break
+
+                if img_rgb_raw is not None:
+                    # Resize RGB to match Thermal dimensions for visualization alignment
+                    h_th, w_th = img_vis.shape[:2]
+                    img_rgb_resized = cv2.resize(img_rgb_raw, (w_th, h_th))
+                else:
+                    # Placeholder if missing
+                    img_rgb_resized = np.zeros_like(img_vis)
+                    cv2.putText(img_rgb_resized, "RGB MISSING", (50, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
             if map_bg is not None:
                 map_img = map_bg.copy()
             else:
                 map_img = np.zeros((canvas_cfg["height"], canvas_cfg["width"], 3), dtype=np.uint8)
+
+            # --- POLYGON VISUALIZATION ---
+            if show_additional_polygons:
+                # 1. Local (Image Space)
+                local_fpath = os.path.join(polygons_local_folder, f"{frame_id}.txt")
+                local_polys = load_polygons(local_fpath, is_global=False)
+
+                # Draw on Thermal
+                draw_polygons_on_image(img_vis, local_polys, color=(255, 255, 0), alpha=0.25)
+
+                # Draw on RGB (mapped to Thermal Coords)
+                if img_rgb_resized is not None:
+                    draw_polygons_on_image(img_rgb_resized, local_polys, color=(255, 255, 0), alpha=0.25)
+
+                # 2. Global (Map Space)
+                global_fpath = os.path.join(polygon_global_folder, f"{frame_id}.txt")
+                global_polys = load_polygons(global_fpath, is_global=True, extent=padded_extent)
+                draw_polygons_on_map(map_img, global_polys, canvas_cfg, color=(255, 255, 0), alpha=0.35)
+            # --------------------------------
 
             if frame_id in drone_pos and int(frame_id) in fov_polys:
                 draw_fov_polygon(map_img, fov_polys[int(frame_id)], canvas_cfg, (0, 200, 200))
@@ -605,20 +748,35 @@ if __name__ == "__main__":
             if frame_id in final_tracks:
                 for t in final_tracks[frame_id]:
                     tid, interp = t["tid"], t["interpolated"]
+
+                    # Skip tracks not in the filter list (if filter is specified)
+                    if track_ids is not None and tid not in track_ids:
+                        continue
+
                     visible_tids.add(tid)  # Mark as visible
                     color = id_to_color(tid)
 
                     label = f"ID {tid}"
 
-                    # Image Space
+                    # Image Space (Thermal)
                     lx1, ly1, lx2, ly2 = int(t["lx1"]), int(t["ly1"]), int(t["lx2"]), int(t["ly2"])
+
+                    # Draw on Thermal
                     if interp:
                         draw_dashed_rectangle(img_vis, (lx1, ly1), (lx2, ly2), color, 2, 8)
                     else:
                         cv2.rectangle(img_vis, (lx1, ly1), (lx2, ly2), color, 2)
-
                     cv2.putText(img_vis, label, (lx1, max(0, ly1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
                                 cv2.LINE_AA)
+
+                    # Draw on RGB (Overlaying Thermal coordinates on Resized RGB)
+                    if img_rgb_resized is not None:
+                        if interp:
+                            draw_dashed_rectangle(img_rgb_resized, (lx1, ly1), (lx2, ly2), color, 2, 8)
+                        else:
+                            cv2.rectangle(img_rgb_resized, (lx1, ly1), (lx2, ly2), color, 2)
+                        cv2.putText(img_rgb_resized, label, (lx1, max(0, ly1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                    color, 1, cv2.LINE_AA)
 
                     # Global Space
                     gx1, gy1, gx2, gy2 = t["gx1"], t["gy1"], t["gx2"], t["gy2"]
@@ -641,6 +799,10 @@ if __name__ == "__main__":
 
             # History Loop - ONLY draw label if NOT visible in current frame
             for tid, pts in track_history.items():
+                # Skip tracks not in the filter list (if filter is specified)
+                if track_ids is not None and tid not in track_ids:
+                    continue
+
                 color = id_to_color(tid)
                 if len(pts) > 1:
                     cv2.polylines(map_img, [np.array(pts)], False, color, 1)
@@ -664,9 +826,27 @@ if __name__ == "__main__":
             h_map, w_map = map_img.shape[:2]
             scale = h_img / h_map
             map_resized = cv2.resize(map_img, (int(w_map * scale), h_img))
-            combined = np.hstack([img_vis, map_resized])
 
-            cv2.putText(combined, f"EPSG: {source_epsg}", (2 * w_img - 285, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            # --- COMBINE VIEWS ---
+            # Order: RGB | Thermal | Global
+
+            views_to_stack = []
+            if img_rgb_resized is not None:
+                # Add titles for clarity
+                cv2.putText(img_rgb_resized, "RGB View", (10, h_img - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (255, 255, 255), 2)
+                views_to_stack.append(img_rgb_resized)
+
+            cv2.putText(img_vis, "Thermal View", (10, h_img - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            views_to_stack.append(img_vis)
+
+            # Map title handled in draw_axes usually, but we can add one
+            views_to_stack.append(map_resized)
+
+            combined = np.hstack(views_to_stack)
+
+            cv2.putText(combined, f"EPSG: {source_epsg}", (combined.shape[1] - 285, 30), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (255, 255, 255), 2)
             cv2.putText(combined, f"{key} | {frame_id}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
             if show_live:

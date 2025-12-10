@@ -31,14 +31,15 @@ from src.bambi.video.video_writer import FFMPEGWriter
 # ============================================================
 # STATIC DEFAULT VALUES - Edit these when running without args
 # ============================================================
-DEFAULT_TRACKING_RESULTS_BASE = r"Z:\ablation"
+DEFAULT_TRACKING_RESULTS_BASE = r"Z:\ablation2"
 DEFAULT_SEQUENCES_BASE = r"Z:\sequences"
 DEFAULT_OUTPUT_BASE = r"Z:\ablation_visualization"
 DEFAULT_MAX_COLS = 3
 DEFAULT_SCALE = 1.0
-DEFAULT_SEQUENCES = ["26_3"]  # Set to list like ["0_1", "0_2"] to filter, or None for all
+DEFAULT_SEQUENCES = None # ["143_1"]  # Set to list like ["0_1", "0_2"] to filter, or None for all
 DEFAULT_CREATE_VIDEO = True  # Set to True to create videos
-DEFAULT_DELETE_IMAGES_AFTER_VIDEO = False  # Set to True to delete images after video creation
+DEFAULT_DELETE_IMAGES_AFTER_VIDEO = True  # Set to True to delete images after video creation
+DEFAULT_OVERWRITE = False  # Set to True to overwrite existing videos
 # ============================================================
 
 def generate_color_palette(num_colors: int = 256) -> Dict[int, Tuple[int, int, int]]:
@@ -386,7 +387,8 @@ def process_sequence(
         max_cols: int = 4,
         scale_factor: float = 1.0,
         videowriter: Optional[FFMPEGWriter] = None,
-        delete_images_after_video: bool = False
+        delete_images_after_video: bool = False,
+        overwrite: bool = False
 ) -> None:
     """
     Process a single video sequence and create comparison grids.
@@ -399,9 +401,16 @@ def process_sequence(
         color_palette: Color mapping for track IDs
         max_cols: Maximum columns in grid
         scale_factor: Scale factor for images
-        create_video: Whether to create a video from the frames
+        videowriter: FFMPEGWriter instance for video creation
         delete_images_after_video: Whether to delete images after video creation
+        overwrite: Whether to overwrite existing videos (default: False)
     """
+    # Check if video already exists and skip if not overwriting
+    video_path = output_dir / f"{seq_name}.mp4"
+    if videowriter is not None and video_path.exists() and not overwrite:
+        print(f"  Skipping {seq_name} - video already exists (use --overwrite to recreate)")
+        return
+
     img_dir = seq_path / 'img1'
     gt_path = seq_path / 'gt' / 'gt.txt'
 
@@ -565,6 +574,12 @@ Examples:
             default=DEFAULT_DELETE_IMAGES_AFTER_VIDEO,
             help='Delete image files after video creation (only effective with --video)'
         )
+        parser.add_argument(
+            '--overwrite',
+            action='store_true',
+            default=DEFAULT_OVERWRITE,
+            help='Overwrite existing videos (default: skip if video exists)'
+        )
 
         args = parser.parse_args()
 
@@ -576,6 +591,7 @@ Examples:
         filter_sequences = args.sequences
         create_video = args.video
         delete_images_after_video = args.delete_images
+        overwrite = args.overwrite
     else:
         # Use static default values
         print("No command line arguments provided, using static default values.")
@@ -587,6 +603,7 @@ Examples:
         print(f"  Filter sequences: {DEFAULT_SEQUENCES}")
         print(f"  Create video:     {DEFAULT_CREATE_VIDEO}")
         print(f"  Delete images:    {DEFAULT_DELETE_IMAGES_AFTER_VIDEO}")
+        print(f"  Overwrite:        {DEFAULT_OVERWRITE}")
         print()
 
         tracking_base = Path(DEFAULT_TRACKING_RESULTS_BASE)
@@ -597,6 +614,7 @@ Examples:
         filter_sequences = DEFAULT_SEQUENCES
         create_video = DEFAULT_CREATE_VIDEO
         delete_images_after_video = DEFAULT_DELETE_IMAGES_AFTER_VIDEO
+        overwrite = DEFAULT_OVERWRITE
 
     # Check FFMPEGWriter availability if video creation is requested
     if create_video and FFMPEGWriter is None:
@@ -661,7 +679,8 @@ Examples:
             max_cols=max_cols,
             scale_factor=scale,
             videowriter=videowriter,
-            delete_images_after_video=delete_images_after_video
+            delete_images_after_video=delete_images_after_video,
+            overwrite=overwrite
         )
 
     print(f"\nDone! Output saved to: {output_base}")
