@@ -39,10 +39,10 @@ if __name__ == '__main__':
         # Step 2: # if frames are already projected (or you don't want to project them at all), set to false
         "project_frames": False,
         "skip_existing_projection": True, # if a projection is already available skip this individual one
-        "projection_method": ProjectionType.OrthographicProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
+        "projection_method": ProjectionType.NoProjection, # define the projection style that should be used (this also determines, which files are used for the detection!)
         # Step 3: flag if wildlife detection should be executed after data preparation
         "detect_animals": True,
-        "skip_already_inferenced_frames": True, # flag if already inferenced frames should be skipped
+        "skip_already_inferenced_frames": False, # flag if already inferenced frames should be skipped
         # Step 4: flag if detected wildlife labels should be projected based on the digital elevation model
         "project_labels": True,
         # Step 5: # if flight relevant data should be exported like the route and the monitored area, as well as statistics about the area in m² and the perimeter in m. Be aware that this is affected by the selected sample_rate.
@@ -87,7 +87,7 @@ if __name__ == '__main__':
     target_crs = CRS.from_epsg(32633) # make sure that your DEM is matching the target_crs!
 
     # Define rendering settings
-    sample_rate = 1 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
+    sample_rate = 10 # sample rate of frames that are considered for projection, animal detection and export of flight data (won't affect the first step with the general frame-extraction)
     limit = -1 # number of frames that should be considered for projection, animal detection and export of flight data (if < 0 every frame is used)
     alfs_number_of_neighbors = 100 # number of neighbors before, as well as after the central frame of an light field (results in a light field based on n + 1 + n images)
     alfs_neighbor_sample_rate = 10 # sample rate of the neighbors
@@ -101,7 +101,8 @@ if __name__ == '__main__':
     aspect_ratio = 1 # aspect ratio of the rendering camera used for projection
 
     # Define yolo model settings
-    model_name = "yolov11PerspectiveViewSingleClsRun6" # model that should be used for the wildlife detection
+    model_path = r"..\model\thermal_animal_detector.pt"
+    labels = ['animal']
     verbose = False # flag if ultralytics should write to console
     min_confidence = 0.5 # minimum confidence that should be considered by the model
 
@@ -347,7 +348,7 @@ if __name__ == '__main__':
     step3_start = time.time()
     os.environ["YOLO_VERBOSE"] = "False"
     ultralyticsLogger.setLevel(logging.WARNING)
-    m = UltralyticsYoloDetector(model_name=model_name, min_confidence=min_confidence, verbose=verbose)
+    m = UltralyticsYoloDetector(model_path=model_path, labels=labels, min_confidence=min_confidence, verbose=verbose)
     if steps_to_do["detect_animals"]:
         print("3. Starting wildlife detection")
         # now the final step has arrived: the inference of our AI models, so load it in the first glance
@@ -713,7 +714,8 @@ if __name__ == '__main__':
                                     }
                                 ]
                             }, f)
-
+        except Exception as e:
+            print(e)
         finally:
             del mesh_data
             del texture_data

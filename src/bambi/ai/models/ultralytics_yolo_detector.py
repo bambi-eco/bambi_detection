@@ -1,6 +1,9 @@
 import json
 import os
+import traceback
 from typing import Optional, Callable, Generator, Tuple, Any, List
+
+from ultralytics import YOLO
 
 from bambi.ai.detection import Detection
 from bambi.ai.domain.BoundingBox import BoundingBox
@@ -13,7 +16,7 @@ import numpy.typing as npt
 
 
 class UltralyticsYoloDetector(Detection):
-    def __init__(self, detection_writer: BoundingBoxWriter = YoloWriter(), model_name: str = "yolov8N-20231023",
+    def __init__(self, model_path: str, labels: list[str], detection_writer: BoundingBoxWriter = YoloWriter(),
                  min_confidence: float = 0.7,
                  frame_accessor: Optional[Callable[[str], Generator[Tuple[int, npt.NDArray[Any]], None, None]]] = None,
                  verbose: bool = False):
@@ -28,18 +31,11 @@ class UltralyticsYoloDetector(Detection):
         else:
             self.__frame_accesor = frame_accessor
 
-        self.__model_name = model_name
         self._min_confidence = min_confidence
-
-        datatype, labels, weights, classes, model = get_config(model_name, verbose = verbose)
-
-        self.__datatype = datatype
         self._labels = labels
-        self.__weights = weights
-        self.__classes = classes
-        self._model = model
+        self._model = YOLO(model_path, verbose=verbose)
 
-        super().__init__(detection_writer, labels)
+        super().__init__(detection_writer, self._labels)
 
     def get_labels(self) -> List[str]:
         return self._labels.copy()
@@ -76,15 +72,3 @@ class UltralyticsYoloDetector(Detection):
                                          float(xyxy[0, 3]), cls, prop, False, None, self.__model_name)
                         frame_boxes.append(bb)
         return frame_boxes
-
-# Load all models
-models = os.environ.get('BAMBI_MODELS')
-if models is None:
-    raise Exception("Environment variable BAMBI_MODELS not set!")
-with open(models) as model_json:
-    global_model_config = json.load(model_json)
-    global_ultralytic_model_config = global_model_config.get("ultralytics-yolo")
-    if global_ultralytic_model_config is None:
-        raise Exception(f"No configuration found for ultralytics-yolo models")
-    for key in global_ultralytic_model_config.keys():
-        model_registry[key] = UltralyticsYoloDetector(model_name=key)

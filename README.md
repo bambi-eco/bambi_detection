@@ -69,9 +69,6 @@ bambi_detection/
    pip install -r requirements.txt
    ```
 
-3. **Configure model environment**
-
-   The detection models are hosted in the [BAMBI Models repository](https://github.com/bambi-eco/Models). Set the environment variable pointing to your model configuration:
 
 ## Configuration
 
@@ -117,10 +114,13 @@ fovy = 50                    # Field of view for projection
 ### Detection Settings
 
 ```python
-model_name = "yolov11PerspectiveViewSingleClsRun6"
+model_path = r"path/to/thermal_animal_detector.pt"
+labels = ['animal']
 min_confidence = 0.5         # Minimum detection confidence
 verbose = False              # Ultralytics console output
 ```
+
+Our YOLO11 model is available on [Hugginface](https://huggingface.co/cpraschl/bambi-thermal-detection).
 
 ## Usage
 
@@ -393,7 +393,7 @@ Standard YOLO format:
 | M30T | DJI | Wide, Thermal, Zoom |
 | M300 | DJI | Wide, Thermal, Zoom |
 
-### Cameras[README_EXTENDED.md](README_EXTENDED.md)
+### Cameras
 - **T (Thermal)** - Thermal infrared camera
 - **W (Wide)** - Wide-angle RGB camera  
 - **Z (Zoom)** - Zoom RGB camera (where available)
