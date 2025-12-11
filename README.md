@@ -163,12 +163,136 @@ verbose = False              # Ultralytics console output
 
 ### Additional Scripts
 
-- **`georeferenced_tracking.py`** - Run tracking with georeferencing
-- **`georeference_polygons.py`** - Georeference polygon annotations
-- **`tracks_to_geojson.py`** - Convert tracks to GeoJSON format
-- **`comparative_visualization.py`** - Compare multiple detection runs
-- **`drone_geotiff_generator.py`** - Generate GeoTIFF outputs
-- **`visualize_tracks_global_and_image.py`** - Visualize tracks on maps and images
+Beyond the main `bambi_detection.py` pipeline, the repository includes several specialized scripts for specific tasks:
+
+#### `comparative_visualization.py`
+**MOT Tracking Comparison Visualization Tool**
+
+Creates side-by-side grid visualizations comparing ground truth annotations with multiple tracker outputs for Multi-Object Tracking (MOT) evaluation. Useful for ablation studies and tracker performance comparison.
+
+```bash
+python comparative_visualization.py <tracking_results_base> <sequences_base> <output_base>
+```
+
+Features:
+- Generates comparison grids showing ground truth vs. different tracker configurations
+- Supports video output with optional image cleanup
+- Parses tracker configuration from folder names (e.g., `modelbotsort_use_embs1_use_velocity0`)
+- Consistent color palette for track IDs across visualizations
+
+---
+
+#### `drone_geotiff_generator.py`
+**Drone Video Frame to GeoTIFF Generator**
+
+Projects drone video frames onto a Digital Elevation Model and exports georeferenced GeoTIFF files compatible with GIS software.
+
+```bash
+python drone_geotiff_generator.py --sequence-id <ID> --images-folder <path> \
+    --data-folder <path> --output-folder <path>
+```
+
+Features:
+- Projects frames using camera intrinsics and extrinsics onto DEM
+- Outputs GeoTIFF files with proper CRS metadata (UTM 33N / EPSG:32633)
+- Handles coordinate transformation from local mesh coordinates to UTM
+
+---
+
+#### `georeferenced_tracking.py`
+**Georeferenced Object Tracking**
+
+Performs object tracking in world coordinates (UTM) rather than pixel coordinates, enabling consistent tracking across frames even with camera movement.
+
+Features:
+- Multiple tracker modes: `GREEDY`, `HUNGARIAN`, `CENTER`, `HUNGARIAN_CENTER`
+- IoU-based and center-distance-based association
+- Class-aware tracking option
+- Track interpolation for missed detections
+- Outputs tracks with 3D world coordinates (x, y, z)
+
+---
+
+#### `georeference_deepsort_mot.py`
+**Georeference DeepSORT MOT Results**
+
+Converts pixel-space tracking results (from DeepSORT or similar trackers) to world coordinates using camera poses and DEM raytracing.
+
+Features:
+- Pose smoothing using Savitzky-Golay filter to reduce GPS jitter
+- Projects bounding box corners to 3D world coordinates
+- Supports batch processing of multiple sequences
+- Handles coordinate system transformations (WGS84 ↔ UTM)
+
+---
+
+#### `georeference_polygons.py`
+**Georeference SAM3 Polygons**
+
+Converts local (pixel-space) polygon annotations from segmentation models (e.g., SAM3) to georeferenced world coordinates.
+
+```bash
+python georeference_polygons.py --source ./local_polygons --target ./georeferenced_polygons \
+    --correction-folder ./correction_data --flight-id 223
+```
+
+Input format (per line):
+```
+<object_type> <num_points> <x1> <y1> <x2> <y2> ... <xN> <yN>
+```
+
+Output format (per line):
+```
+<object_type> <num_points> <X1> <Y1> <Z1> <X2> <Y2> <Z2> ... <XN> <YN> <ZN>
+```
+
+---
+
+#### `misb_video_converter.py`
+**MISB ST 0601 Video Converter**
+
+Creates videos with embedded KLV metadata tracks following the MISB ST 0601.17 standard. Output is compatible with QGIS and other GIS applications that support MISB metadata for drone video overlay.
+
+```bash
+python misb_video_converter.py --sequence-id <ID> --images-folder <path> \
+    --poses-file <path> --output <path.mp4>
+```
+
+Features:
+- Generates KLV (Key-Length-Value) metadata packets per MISB ST 0601.17
+- Embeds platform position, orientation, sensor parameters, and timestamps
+- Requires FFmpeg for video encoding
+- Compatible with QGIS video geotagging
+
+---
+
+#### `tracks_to_geojson.py`
+**Export Tracks to GeoJSON**
+
+Converts georeferenced tracking results (CSV format) to GeoJSON for visualization in GIS applications or web maps.
+
+Features:
+- Exports track trajectories as LineStrings
+- Exports detection bounding boxes as Polygons
+- Exports detection centers as Points
+- Deterministic color assignment per track ID
+- Supports both individual track export and combined flight export
+- Transforms UTM coordinates to WGS84 (EPSG:4326)
+
+---
+
+#### `visualize_tracks_global_and_image.py`
+**Dual-View Track Visualization**
+
+Creates synchronized visualizations showing tracks both in image space (pixel coordinates) and world space (georeferenced map view).
+
+Features:
+- Side-by-side or overlaid visualization of local and global tracks
+- Track interpolation for smooth visualization
+- Map tile fetching for background context
+- Video output with FFmpeg
+- Consistent track coloring across views
+- Supports multiple tracking algorithms and configurations
 
 ## Input Data Requirements
 
