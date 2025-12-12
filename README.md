@@ -415,9 +415,3 @@ Be careful, with re-running the `extract_frames` stages, this will clean up the 
 ### Frame Extraction Warning
 
 The `extract_frames` step will **delete the entire target folder** before extracting frames. Ensure you have backups of any important data before enabling this step.
-
-## Acknowledgments
-
-- [Ultralytics](https://ultralytics.com/) for YOLO implementation
-- [AirData](https://airdata.com/) for flight log services
-- The BAMBI team for developing the light field technology
