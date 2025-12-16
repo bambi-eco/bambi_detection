@@ -1546,9 +1546,9 @@ if __name__ == "__main__":
     # Settings
     parser.add_argument("--resolution", type=float, default=0.05,
                         help="Ground resolution in meters/pixel (default: 0.05)")
-    parser.add_argument("--crs", type=str, default="EPSG:32632",
-                        help="Coordinate Reference System (default: EPSG:32632)")
-    parser.add_argument("--blend-mode", type=str, choices=['integral', 'first', 'last', 'center'], default='first',
+    parser.add_argument("--crs", type=str, default="EPSG:32633",
+                        help="Coordinate Reference System (default: EPSG:32633)")
+    parser.add_argument("--blend-mode", type=str, choices=['integral', 'first', 'last', 'center'], default='integral',
                         help="Pixel blending mode (default: first)")
     parser.add_argument("--format", type=str, choices=['tif', 'png', 'jpg'], default='tif', help="Output format")
     parser.add_argument("--crop", action="store_true", default=True, help="Crop output to content area")
