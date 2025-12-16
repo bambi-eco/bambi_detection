@@ -1520,99 +1520,148 @@ def render_tiled_orthomosaic(
 
 if __name__ == "__main__":
     import sys
+    import argparse
 
+    # Configure Logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
 
-    # Example usage
-    FLIGHT_ID = "14"
-    DEFAULT_DEM = rf"Z:\correction_data\{FLIGHT_ID}_dem.glb"
-    DEFAULT_DEM_METADATA = rf"Z:\correction_data\{FLIGHT_ID}dem_mesh_r2.json"
-    DEFAULT_POSES = rf"Z:\correction_data\{FLIGHT_ID}_matched_poses.json"
-    DEFAULT_IMAGES = r"Z:\20250312_Dataset_trimmed\images\val"
-    DEFAULT_OUTPUT = r"Z:\orthomosaic.tif"
-    DEFAULT_CORRECTION = rf"Z:\correction_data\{FLIGHT_ID}_correction.json"
-    DEFAULT_ONEFILE_CORRECTIONS = r"Z:\20250312_Dataset_trimmed\corrections.json"
-    DEFAULT_MASK = rf"Z:\correction_data\{FLIGHT_ID}_mask_t.png"
-    DEFAULT_FRAME_START = 0
-    DEFAULT_FRAME_END = None
-    DEFAULT_CRS = "EPSG:32632"
-    DEFAULT_BLEND_MODE = "first"  # "integral", "first", "last", "center"
-    CROP_TO_CONTENT = True
+    parser = argparse.ArgumentParser(description="Generate Georeferenced Orthomosaic from Drone Imagery")
 
-    # Get paths from environment or use defaults
-    dem_file = os.environ.get("DEM_FILE", DEFAULT_DEM)
-    dem_metadata_file = os.environ.get("DEM_METADATA_FILE", DEFAULT_DEM_METADATA)
-    poses_file = os.environ.get("POSES_FILE", DEFAULT_POSES)
-    images_folder = os.environ.get("IMAGES_FOLDER", DEFAULT_IMAGES)
-    output_file = os.environ.get("OUTPUT_FILE", DEFAULT_OUTPUT)
-    correction_file = os.environ.get("CORRECTION_FILE", DEFAULT_CORRECTION)
-    onefile_corrections = os.environ.get("ONEFILE_CORRECTIONS", DEFAULT_ONEFILE_CORRECTIONS)
-    mask_file = os.environ.get("MASK_FILE", DEFAULT_MASK)
+    # Required Arguments
+    parser.add_argument("--sequence-id", default="14", help="ID of the flight sequence (e.g., '14')")
+    parser.add_argument("--images-folder", default=r"Z:\20250312_Dataset_trimmed\images\val", help="Path to the folder containing source images")
+    parser.add_argument("--data-folder", default=r"Z:\correction_data", help="Path to the folder containing JSON/GLB data files")
+    parser.add_argument("--output-folder", default=r"Z:\output", help="Path where the output GeoTIFF will be saved")
 
-    # Frame filter from environment
-    frame_start = os.environ.get("FRAME_START", DEFAULT_FRAME_START)
-    frame_end = os.environ.get("FRAME_END", DEFAULT_FRAME_END)
-    frame_filter = None
-    if frame_start is not None or frame_end is not None:
-        frame_filter = FrameFilter(
-            start=int(frame_start) if frame_start else None,
-            end=int(frame_end) if frame_end else None
-        )
+    # Optional File Overrides (if naming convention differs)
+    parser.add_argument("--poses-file", help="Explicit path to matched poses JSON")
+    parser.add_argument("--dem-file", help="Explicit path to DEM GLB file")
+    parser.add_argument("--mask-file", help="Explicit path to mask PNG")
+    parser.add_argument("--corrections-file", help="Explicit path to unified corrections JSON")
 
-    # CRS from environment (e.g., "32632" for UTM 32N, or "EPSG:31255" for Austria GK Central)
-    crs_env = os.environ.get("CRS", DEFAULT_CRS)
-    crs = None
-    if crs_env:
-        try:
-            crs = int(crs_env)  # Try as EPSG code
-        except ValueError:
-            crs = crs_env  # Use as string (e.g., "EPSG:32632")
+    # Settings
+    parser.add_argument("--resolution", type=float, default=0.05,
+                        help="Ground resolution in meters/pixel (default: 0.05)")
+    parser.add_argument("--crs", type=str, default="EPSG:32632",
+                        help="Coordinate Reference System (default: EPSG:32632)")
+    parser.add_argument("--blend-mode", type=str, choices=['integral', 'first', 'last', 'center'], default='first',
+                        help="Pixel blending mode (default: first)")
+    parser.add_argument("--format", type=str, choices=['tif', 'png', 'jpg'], default='tif', help="Output format")
+    parser.add_argument("--crop", action="store_true", default=True, help="Crop output to content area")
+    parser.add_argument("--no-crop", action="store_false", dest="crop", help="Do not crop output")
 
-    # Blend mode from environment
-    # Options: "integral" (default), "first", "last", "center"
-    blend_mode_str = os.environ.get("BLEND_MODE", DEFAULT_BLEND_MODE).lower()
+    # Advanced Settings
+    parser.add_argument("--max-tile-size", type=int, default=8192, help="Max tile size for processing")
+    parser.add_argument("--frame-start", type=int, default=None, help="Start frame index")
+    parser.add_argument("--frame-end", type=int, default=None, help="End frame index")
+
+    args = parser.parse_args()
+
+    # --- Construct Paths ---
+    seq_id = args.sequence_id
+    data_folder = args.data_folder
+
+    # Define standard filenames based on sequence ID
+    # 1. DEM File
+    dem_file = args.dem_file if args.dem_file else os.path.join(data_folder, f"{seq_id}_dem.glb")
+
+    # 2. Poses File
+    poses_file = args.poses_file if args.poses_file else os.path.join(data_folder, f"{seq_id}_matched_poses.json")
+
+    # 3. Metadata File (Try standard convention)
+    dem_metadata_file = os.path.join(data_folder, f"{seq_id}_dem_mesh_r2.json")
+    if not os.path.exists(dem_metadata_file):
+        # Fallback try without the _r2 suffix or different naming if needed
+        dem_metadata_file = os.path.join(data_folder, f"{seq_id}_dem_metadata.json")
+
+    # 4. Correction Files
+    # Per-flight correction
+    correction_matrix_file = os.path.join(data_folder, f"{seq_id}_correction.json")
+    # Unified corrections (optional, can be passed via args or assumed in data folder)
+    onefile_corrections_file = args.corrections_file if args.corrections_file else os.path.join(data_folder,
+                                                                                                "corrections.json")
+
+    # 5. Mask File
+    mask_file = args.mask_file if args.mask_file else os.path.join(data_folder, f"{seq_id}_mask_t.png")
+
+    # 6. Output File
+    os.makedirs(args.output_folder, exist_ok=True)
+    output_filename = f"{seq_id}_orthomosaic.{args.format}"
+    output_file = os.path.join(args.output_folder, output_filename)
+
+    # --- Validate Inputs ---
+    if not os.path.exists(dem_file):
+        logging.error(f"DEM file not found: {dem_file}")
+        sys.exit(1)
+    if not os.path.exists(poses_file):
+        logging.error(f"Poses file not found: {poses_file}")
+        sys.exit(1)
+    if not os.path.exists(args.images_folder):
+        logging.error(f"Images folder not found: {args.images_folder}")
+        sys.exit(1)
+
+    # --- Configure Settings ---
+
+    # Parse Blend Mode
     blend_mode_map = {
         "integral": BlendMode.INTEGRAL,
         "first": BlendMode.FIRST,
         "last": BlendMode.LAST,
         "center": BlendMode.CENTER,
     }
-    blend_mode = blend_mode_map.get(blend_mode_str, BlendMode.INTEGRAL)
+    blend_mode = blend_mode_map[args.blend_mode]
 
-    # Flight key (optional)
-    flight_key = os.environ.get("FLIGHT_KEY", FLIGHT_ID)
+    # Parse Frame Filter
+    frame_filter = None
+    if args.frame_start is not None or args.frame_end is not None:
+        frame_filter = FrameFilter(start=args.frame_start, end=args.frame_end)
 
-    # Settings from environment
+    # Parse CRS (Handle int vs string)
+    crs_input = args.crs
+    try:
+        crs_val = int(crs_input)
+    except ValueError:
+        crs_val = crs_input
+
     settings = OrthomosaicSettings(
-        ground_resolution=float(os.environ.get("GROUND_RESOLUTION", 0.05)),
-        max_tile_size=int(os.environ.get("MAX_TILE_SIZE", 8192)),
-        alpha_threshold=float(os.environ.get("ALPHA_THRESHOLD", 0.5)),
-        frame_filter=frame_filter,
+        ground_resolution=args.resolution,
+        max_tile_size=args.max_tile_size,
         blend_mode=blend_mode,
-        crs=crs,
-        geotiff=bool(int(os.environ.get("GEOTIFF", 1))),
-        geotiff_compression=os.environ.get("GEOTIFF_COMPRESSION", "lzw"),
-        create_overviews=bool(int(os.environ.get("CREATE_OVERVIEWS", 1))),
-        coord_offset_x=float(os.environ.get("COORD_OFFSET_X", 0.0)),
-        coord_offset_y=float(os.environ.get("COORD_OFFSET_Y", 0.0)),
-        crop_to_content=bool(int(os.environ.get("CROP_TO_CONTENT", 1 if CROP_TO_CONTENT else 0))),
-        manual_offset_x=float(os.environ.get("MANUAL_OFFSET_X", 0.0)),
-        manual_offset_y=float(os.environ.get("MANUAL_OFFSET_Y", 0.0)),
+        crs=crs_val,
+        frame_filter=frame_filter,
+        crop_to_content=args.crop,
+        output_format=args.format,
+        # Default flags
+        geotiff=True,
+        create_overviews=True,
+        auto_contrast=True
     )
 
-    render_orthomosaic(
-        dem_file=dem_file,
-        poses_file=poses_file,
-        images_folder=images_folder,
-        output_file=output_file,
-        settings=settings,
-        mask_file=mask_file,
-        correction_matrix_file=correction_file,
-        onefile_corrections_file=onefile_corrections,
-        flight_key=flight_key,
-        dem_metadata_file=dem_metadata_file
-    )
+    logging.info(f"Processing Sequence ID: {seq_id}")
+    logging.info(f"Inputs: {data_folder}")
+    logging.info(f"Output: {output_file}")
+
+    # --- Run Generation ---
+    try:
+        render_orthomosaic(
+            dem_file=dem_file,
+            poses_file=poses_file,
+            images_folder=args.images_folder,
+            output_file=output_file,
+            settings=settings,
+            mask_file=mask_file,
+            correction_matrix_file=correction_matrix_file,
+            onefile_corrections_file=onefile_corrections_file,
+            flight_key=seq_id,
+            dem_metadata_file=dem_metadata_file
+        )
+    except Exception as e:
+        logging.error(f"Orthomosaic generation failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

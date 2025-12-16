@@ -40,6 +40,7 @@ bambi_detection/
 │       ├── drone_geotiff_generator.py   # Generate GeoTIFF outputs
 │       ├── georeferenced_tracking.py    # Georeferenced object tracking
 │       ├── georeference_polygons.py     # Georeference polygon annotations
+│       ├── orthomosaic.py               # Generate GeoTIFF outputs
 │       ├── tracks_to_geojson.py         # Export tracks as GeoJSON
 │       └── visualize_tracks_global_and_image.py
 ├── requirements.txt
@@ -263,6 +264,26 @@ Features:
 - Embeds platform position, orientation, sensor parameters, and timestamps
 - Requires FFmpeg for video encoding
 - Compatible with QGIS video geotagging
+
+---
+
+#### `orthomosaic.py`
+**Drone Frames to orthomosaic**
+
+Projects multiple drone video frames onto a Digital Elevation Model and exports one georeferenced orthomosaic as GeoTIFF compatible with GIS software.
+
+```bash
+python drone_geotiff_generator.py \
+    --sequence-id <ID> \
+    --images-folder <path> \
+    --data-folder <path> \
+    --output-folder <path>
+```
+
+Features:
+- Projects frames using camera intrinsics and extrinsics onto DEM
+- Outputs GeoTIFF file with proper CRS metadata (UTM 33N / EPSG:32633)
+- Handles coordinate transformation from local mesh coordinates to UTM
 
 ---
 
