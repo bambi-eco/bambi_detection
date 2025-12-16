@@ -161,6 +161,12 @@ class OrthomosaicSettings:
     # Removes empty borders around the orthomosaic
     crop_to_content: bool = False
 
+    # Manual coordinate adjustment (applied AFTER the origin offset)
+    # Use this to fine-tune the georeferencing if there's a systematic offset
+    # Positive values shift the output east/north
+    manual_offset_x: float = 0.0
+    manual_offset_y: float = 0.0
+
     def __post_init__(self):
         if self.overview_levels is None:
             self.overview_levels = [2, 4, 8, 16]
@@ -210,6 +216,9 @@ def create_global_orthographic_camera(
     """
     Create an orthographic camera that covers the entire survey area.
     The camera looks straight down (negative Z direction).
+
+    Note: The camera is set up with flipped Y-axis so the rendered output
+    matches GeoTIFF convention (row 0 = north/max_y).
     """
     min_x, min_y, max_x, max_y = bounds
     max_z = float(mesh_aabb.p_max.z)
@@ -221,7 +230,8 @@ def create_global_orthographic_camera(
 
     # Compute orthographic size (width, height in world units)
     ortho_width = max_x - min_x
-    ortho_height = max_y - min_y
+    # Negative height flips Y-axis so row 0 = max_y (north), matching GeoTIFF convention
+    ortho_height = -(max_y - min_y)
 
     # Camera rotation: looking straight down
     # Default camera looks along -Z, which is what we want for top-down view
@@ -304,8 +314,8 @@ def create_tile_camera(
     # Tile bounds in world coordinates
     tile_min_x = min_x + x_start * pixel_to_world_x
     tile_max_x = min_x + (x_start + tile_width) * pixel_to_world_x
-    tile_min_y = min_y + y_start * pixel_to_world_y
-    tile_max_y = min_y + (y_start + tile_height) * pixel_to_world_y
+    tile_max_y = max_y - y_start * pixel_to_world_y
+    tile_min_y = max_y - (y_start + tile_height) * pixel_to_world_y
 
     # Tile center and size
     tile_center_x = (tile_min_x + tile_max_x) / 2.0
@@ -344,6 +354,9 @@ class DEMMetadata:
     width: Optional[int] = None
     height: Optional[int] = None
     transform: Optional[List[float]] = None
+    # Transform-based origin (from the affine transform, if different)
+    transform_origin_x: Optional[float] = None
+    transform_origin_y: Optional[float] = None
 
     def get_epsg_code(self) -> Optional[int]:
         """Extract EPSG code as integer from CRS string."""
@@ -380,8 +393,17 @@ def load_dem_metadata(dem_metadata_file: str) -> Optional[DEMMetadata]:
 
         origin = data.get("origin", [0, 0, 0])
         crs = data.get("crs", "")
+        transform = data.get("transform")
 
         origin_wgs84 = data.get("origin_wgs84", {})
+
+        # Extract transform origin if available
+        # Transform format: [pixel_size_x, rot_x, origin_x, rot_y, pixel_size_y, origin_y, 0, 0, 1]
+        transform_origin_x = None
+        transform_origin_y = None
+        if transform and len(transform) >= 6:
+            transform_origin_x = float(transform[2])
+            transform_origin_y = float(transform[5])
 
         metadata = DEMMetadata(
             crs=crs,
@@ -392,7 +414,9 @@ def load_dem_metadata(dem_metadata_file: str) -> Optional[DEMMetadata]:
             origin_wgs84_lon=origin_wgs84.get("longitude"),
             width=data.get("width"),
             height=data.get("height"),
-            transform=data.get("transform"),
+            transform=transform,
+            transform_origin_x=transform_origin_x,
+            transform_origin_y=transform_origin_y,
         )
 
         logging.info(f"Loaded DEM metadata from {dem_metadata_file}")
@@ -400,6 +424,11 @@ def load_dem_metadata(dem_metadata_file: str) -> Optional[DEMMetadata]:
         logging.info(f"  Origin (UTM): X={metadata.origin_x:.3f}, Y={metadata.origin_y:.3f}, Z={metadata.origin_z:.3f}")
         if metadata.origin_wgs84_lat and metadata.origin_wgs84_lon:
             logging.info(f"  Origin (WGS84): {metadata.origin_wgs84_lat:.6f}°N, {metadata.origin_wgs84_lon:.6f}°E")
+        if transform_origin_x is not None and transform_origin_y is not None:
+            logging.info(f"  Transform origin: X={transform_origin_x:.3f}, Y={transform_origin_y:.3f}")
+            diff_x = transform_origin_x - metadata.origin_x
+            diff_y = transform_origin_y - metadata.origin_y
+            logging.info(f"  Difference (transform - origin): dX={diff_x:.2f}m, dY={diff_y:.2f}m")
 
         return metadata
 
@@ -532,24 +561,23 @@ def save_world_file(
 ) -> str:
     """
     Save a world file (.tfw/.pgw/.jgw) for georeferencing.
-    This is a fallback when GeoTIFF doesn't work properly.
 
     World file format (6 lines):
-    1. Pixel size in X direction (usually positive)
-    2. Rotation about Y axis (usually 0)
-    3. Rotation about X axis (usually 0)
-    4. Pixel size in Y direction (usually negative)
+    1. Pixel size in X direction (positive)
+    2. Rotation about Y axis (0)
+    3. Rotation about X axis (0)
+    4. Pixel size in Y direction (negative = Y decreases down image rows)
     5. X coordinate of center of upper-left pixel
     6. Y coordinate of center of upper-left pixel
     """
     min_x, min_y, max_x, max_y = bounds
 
     pixel_size_x = (max_x - min_x) / width
-    pixel_size_y = -(max_y - min_y) / height  # Negative because Y decreases down
+    pixel_size_y = -(max_y - min_y) / height  # Negative: Y decreases as row increases
 
-    # Center of upper-left pixel
-    upper_left_x = min_x + pixel_size_x / 2
-    upper_left_y = max_y + pixel_size_y / 2  # Note: pixel_size_y is negative
+    # Upper-left pixel (row 0, col 0) center
+    origin_x = min_x + pixel_size_x / 2
+    origin_y = max_y + pixel_size_y / 2  # max_y minus half pixel
 
     # Determine world file extension based on image extension
     base, ext = os.path.splitext(output_file)
@@ -570,8 +598,8 @@ def save_world_file(
         f.write("0.0\n")
         f.write("0.0\n")
         f.write(f"{pixel_size_y:.10f}\n")
-        f.write(f"{upper_left_x:.10f}\n")
-        f.write(f"{upper_left_y:.10f}\n")
+        f.write(f"{origin_x:.10f}\n")
+        f.write(f"{origin_y:.10f}\n")
 
     logging.info(f"World file saved: {world_file}")
     return world_file
@@ -665,7 +693,8 @@ def save_geotiff(
         count = image.shape[2]
 
     # Create the geotransform from bounds
-    # rasterio uses affine transform: from_bounds(west, south, east, north, width, height)
+    # Standard: from_bounds(west, south, east, north, width, height)
+    # Row 0 = north (max_y), rows go southward
     transform = from_bounds(min_x, min_y, max_x, max_y, width, height)
 
     logging.info(f"  Affine transform: {transform}")
@@ -805,16 +834,16 @@ def crop_to_content(
     cropped = image[row_min:row_max + 1, col_min:col_max + 1]
 
     # Calculate new bounds
-    # Note: Image Y-axis is inverted relative to world coordinates
-    # row 0 = top of image = max_y in world coords
-    # row (height-1) = bottom of image = min_y in world coords
+    # Since we swap Y in GeoTIFF (from_bounds uses max_y, min_y),
+    # row 0 = max_y (north), row N = min_y (south)
+    # So row_min is at high Y, row_max is at low Y
     pixel_size_x = (max_x - min_x) / width
     pixel_size_y = (max_y - min_y) / height
 
     new_min_x = min_x + col_min * pixel_size_x
     new_max_x = min_x + (col_max + 1) * pixel_size_x
 
-    # Y is inverted: row_min is at top (high Y), row_max is at bottom (low Y)
+    # row_min is at top (max_y side), row_max is at bottom (min_y side)
     new_max_y = max_y - row_min * pixel_size_y
     new_min_y = max_y - (row_max + 1) * pixel_size_y
 
@@ -832,7 +861,8 @@ def save_image(
     image: np.ndarray,
     output_file: str,
     bounds: Tuple[float, float, float, float],
-    settings: OrthomosaicSettings
+    settings: OrthomosaicSettings,
+    dem_metadata: Optional['DEMMetadata'] = None
 ) -> None:
     """
     Save the orthomosaic image with optional georeferencing.
@@ -842,6 +872,7 @@ def save_image(
         output_file: Output file path
         bounds: World coordinate bounds (local coordinates)
         settings: Orthomosaic settings
+        dem_metadata: Optional DEM metadata (unused, kept for compatibility)
     """
     # Optionally crop to content (before applying coordinate offsets)
     if settings.crop_to_content:
@@ -853,19 +884,24 @@ def save_image(
 
     # Apply coordinate offsets to convert from local to real-world coordinates
     min_x, min_y, max_x, max_y = bounds
+
     geo_bounds = (
-        min_x + settings.coord_offset_x,
-        min_y + settings.coord_offset_y,
-        max_x + settings.coord_offset_x,
-        max_y + settings.coord_offset_y
+        min_x + settings.coord_offset_x + settings.manual_offset_x,
+        min_y + settings.coord_offset_y + settings.manual_offset_y,
+        max_x + settings.coord_offset_x + settings.manual_offset_x,
+        max_y + settings.coord_offset_y + settings.manual_offset_y
     )
 
+    logging.info(f"Coordinate information:")
+    logging.info(f"  Local bounds: ({min_x:.2f}, {min_y:.2f}) - ({max_x:.2f}, {max_y:.2f})")
+    logging.info(f"  Image extent: {max_x - min_x:.2f} x {max_y - min_y:.2f} m")
     if settings.coord_offset_x != 0 or settings.coord_offset_y != 0:
-        logging.info(f"Applied coordinate offsets: X+{settings.coord_offset_x}, Y+{settings.coord_offset_y}")
-        logging.info(f"  Local bounds: ({min_x:.2f}, {min_y:.2f}) - ({max_x:.2f}, {max_y:.2f})")
-        logging.info(f"  Geo bounds:   ({geo_bounds[0]:.2f}, {geo_bounds[1]:.2f}) - ({geo_bounds[2]:.2f}, {geo_bounds[3]:.2f})")
+        logging.info(f"  Origin offset: X+{settings.coord_offset_x:.2f}, Y+{settings.coord_offset_y:.2f}")
+    if settings.manual_offset_x != 0 or settings.manual_offset_y != 0:
+        logging.info(f"  Manual offset: X+{settings.manual_offset_x:.2f}, Y+{settings.manual_offset_y:.2f}")
+    logging.info(f"  Final UTM bounds: ({geo_bounds[0]:.2f}, {geo_bounds[1]:.2f}) - ({geo_bounds[2]:.2f}, {geo_bounds[3]:.2f})")
 
-    # Always save world file as a fallback for any format
+    # Save world file
     save_world_file(output_file, geo_bounds, width, height)
 
     # Save PRJ file if CRS is specified
@@ -979,6 +1015,12 @@ def render_orthomosaic(
     mesh_aabb = get_aabb(mesh_data.vertices)
     tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
 
+    # Log mesh bounds (LOCAL coordinates)
+    logging.info(f"Mesh bounds (LOCAL):")
+    logging.info(f"  X: [{float(mesh_aabb.p_min.x):.2f}, {float(mesh_aabb.p_max.x):.2f}]")
+    logging.info(f"  Y: [{float(mesh_aabb.p_min.y):.2f}, {float(mesh_aabb.p_max.y):.2f}]")
+    logging.info(f"  Z: [{float(mesh_aabb.p_min.z):.2f}, {float(mesh_aabb.p_max.z):.2f}]")
+
     # Create OpenGL context
     ctx = make_mgl_context()
 
@@ -1020,11 +1062,28 @@ def render_orthomosaic(
         release_all(ctx)
         return
 
+    # Log shot position range (LOCAL coordinates)
+    shot_positions = np.array([shot.camera.transform.position for shot in shots])
+    logging.info(f"Shot positions (LOCAL):")
+    logging.info(f"  X: [{shot_positions[:, 0].min():.2f}, {shot_positions[:, 0].max():.2f}]")
+    logging.info(f"  Y: [{shot_positions[:, 1].min():.2f}, {shot_positions[:, 1].max():.2f}]")
+    logging.info(f"  Z: [{shot_positions[:, 2].min():.2f}, {shot_positions[:, 2].max():.2f}]")
+
     # Compute global bounds
     logging.info("Computing global bounds")
     global_bounds = compute_global_bounds(shots, mesh_aabb)
-    logging.info(f"Global bounds: x=[{global_bounds[0]:.2f}, {global_bounds[2]:.2f}], "
+    logging.info(f"Global bounds (LOCAL): x=[{global_bounds[0]:.2f}, {global_bounds[2]:.2f}], "
                  f"y=[{global_bounds[1]:.2f}, {global_bounds[3]:.2f}]")
+
+    # Preview UTM bounds
+    utm_preview = (
+        global_bounds[0] + settings.coord_offset_x,
+        global_bounds[1] + settings.coord_offset_y,
+        global_bounds[2] + settings.coord_offset_x,
+        global_bounds[3] + settings.coord_offset_y
+    )
+    logging.info(f"Expected UTM bounds: x=[{utm_preview[0]:.2f}, {utm_preview[2]:.2f}], "
+                 f"y=[{utm_preview[1]:.2f}, {utm_preview[3]:.2f}]")
 
     # Compute output resolution
     global_resolution = compute_output_resolution(global_bounds, settings.ground_resolution)
@@ -1414,11 +1473,12 @@ def render_tiled_orthomosaic(
         min_x, min_y, max_x, max_y = global_bounds
         pixel_size_x = (max_x - min_x) / global_resolution.width
         pixel_size_y = (max_y - min_y) / global_resolution.height
+
         tile_bounds = (
             min_x + x_start * pixel_size_x,
-            min_y + y_start * pixel_size_y,
+            max_y - (y_start + tile_height) * pixel_size_y,  # min_y of tile
             min_x + (x_start + tile_width) * pixel_size_x,
-            min_y + (y_start + tile_height) * pixel_size_y
+            max_y - y_start * pixel_size_y  # max_y of tile
         )
 
         # Create renderer for this tile
@@ -1470,18 +1530,18 @@ if __name__ == "__main__":
     # Example usage
     FLIGHT_ID = "14"
     DEFAULT_DEM = rf"Z:\correction_data\{FLIGHT_ID}_dem.glb"
-    DEFAULT_DEM_METADATA = rf"Z:\correction_data\{FLIGHT_ID}_dem_mesh_r2.json"
+    DEFAULT_DEM_METADATA = rf"Z:\correction_data\{FLIGHT_ID}dem_mesh_r2.json"
     DEFAULT_POSES = rf"Z:\correction_data\{FLIGHT_ID}_matched_poses.json"
     DEFAULT_IMAGES = r"Z:\20250312_Dataset_trimmed\images\val"
     DEFAULT_OUTPUT = r"Z:\orthomosaic.tif"
     DEFAULT_CORRECTION = rf"Z:\correction_data\{FLIGHT_ID}_correction.json"
     DEFAULT_ONEFILE_CORRECTIONS = r"Z:\20250312_Dataset_trimmed\corrections.json"
     DEFAULT_MASK = rf"Z:\correction_data\{FLIGHT_ID}_mask_t.png"
-    DEFAULT_BLEND_MODE = "first" # "integral", "first", "last", "center"
-    DEFAULT_START_FRAME = 0
-    DEFAULT_END_FRAME = None
-    DEFAULT_CRS = 32633
-    DEFAULT_CROP = True
+    DEFAULT_FRAME_START = 0
+    DEFAULT_FRAME_END = None
+    DEFAULT_CRS = "EPSG:32632"
+    DEFAULT_BLEND_MODE = "first"  # "integral", "first", "last", "center"
+    CROP_TO_CONTENT = True
 
     # Get paths from environment or use defaults
     dem_file = os.environ.get("DEM_FILE", DEFAULT_DEM)
@@ -1494,8 +1554,8 @@ if __name__ == "__main__":
     mask_file = os.environ.get("MASK_FILE", DEFAULT_MASK)
 
     # Frame filter from environment
-    frame_start = os.environ.get("FRAME_START", DEFAULT_START_FRAME)
-    frame_end = os.environ.get("FRAME_END", DEFAULT_END_FRAME)
+    frame_start = os.environ.get("FRAME_START", DEFAULT_FRAME_START)
+    frame_end = os.environ.get("FRAME_END", DEFAULT_FRAME_END)
     frame_filter = None
     if frame_start is not None or frame_end is not None:
         frame_filter = FrameFilter(
@@ -1539,7 +1599,9 @@ if __name__ == "__main__":
         create_overviews=bool(int(os.environ.get("CREATE_OVERVIEWS", 1))),
         coord_offset_x=float(os.environ.get("COORD_OFFSET_X", 0.0)),
         coord_offset_y=float(os.environ.get("COORD_OFFSET_Y", 0.0)),
-        crop_to_content=bool(int(os.environ.get("CROP_TO_CONTENT", 1 if DEFAULT_CROP else 0))),
+        crop_to_content=bool(int(os.environ.get("CROP_TO_CONTENT", 1 if CROP_TO_CONTENT else 0))),
+        manual_offset_x=float(os.environ.get("MANUAL_OFFSET_X", 0.0)),
+        manual_offset_y=float(os.environ.get("MANUAL_OFFSET_Y", 0.0)),
     )
 
     render_orthomosaic(
