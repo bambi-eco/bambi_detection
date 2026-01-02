@@ -69,6 +69,6 @@ class UltralyticsYoloDetector(Detection):
                         cls = prediction.names[int(box.cls.item())]
                         xyxy = box.xyxy.numpy()
                         bb = BoundingBox(idx, float(xyxy[0, 0]), float(xyxy[0, 1]), float(xyxy[0, 2]),
-                                         float(xyxy[0, 3]), cls, prop, False, None, self.__model_name)
+                                         float(xyxy[0, 3]), cls, prop, False, None, "")# self.__model_name)
                         frame_boxes.append(bb)
         return frame_boxes
