@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bambi-detection"
+version = "0.1.0"
+description = "BAMBI Detection: drone + AI pipeline for wildlife detection, projection, and georeferencing."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE.txt" }
+authors = [{ name = "bambi-eco" }]
+keywords = ["wildlife", "drones", "yolo", "computer-vision", "georeferencing", "light-field"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+# Let setuptools load deps from requirements.txt so you keep a single source of truth.
+dynamic = ["dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/bambi-eco/bambi_detection"
+Repository = "https://github.com/bambi-eco/bambi_detection"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[project.optional-dependencies]
+alfs = [
+  "alfs_py @ git+https://github.com/bambi-eco/alfs_py.git"
+]
