@@ -452,6 +452,7 @@ if __name__ == '__main__':
     glb_files = list(parent_folder.glob("*.glb"))
     for glb_file in glb_files:
         id_ = glb_file.stem.replace("_dem", "")
+        print(f"Validating flight {id_}...")
         poses_json = glb_file.with_name(f"{id_}_matched_poses.json")
         dem_json = glb_file.with_name(f"{id_}_dem_mesh_r2.json")
 
