@@ -14,7 +14,7 @@ from typing import (
     Union,
 )
 
-from bambi.srt.srt_frame import SrtFrame
+from .srt_frame import SrtFrame
 
 
 class SrtParser:

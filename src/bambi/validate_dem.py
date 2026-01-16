@@ -21,6 +21,8 @@ import numpy as np
 from pyproj import Transformer
 from trimesh import Trimesh
 
+from src.bambi.srt.srt_parser import SrtParser
+
 
 @dataclass
 class ValidationResult:
@@ -196,7 +198,7 @@ def calculate_distance_to_bbox(point: tuple[float, float],
     return np.sqrt(dx ** 2 + dy ** 2)
 
 
-def validate_dem_coverage(air_data_path: Path,
+def validate_dem_coverage(meta_data_path: Path,
                           dem_gltf_path: Path,
                           dem_json_path: Optional[Path] = None,
                           margin_meters: float = 0.0) -> ValidationResult:
@@ -204,7 +206,7 @@ def validate_dem_coverage(air_data_path: Path,
     Validate that a DEM covers the flight path from an AirData log.
 
     Args:
-        air_data_path: Path to AirData CSV file
+        meta_data_path: Path to AirData CSV file
         dem_gltf_path: Path to DEM GLTF file
         dem_json_path: Path to DEM metadata JSON file (defaults to same name as GLTF)
         margin_meters: Additional margin around DEM to consider as "covered"
@@ -212,7 +214,7 @@ def validate_dem_coverage(air_data_path: Path,
     Returns:
         ValidationResult with detailed coverage information
     """
-    flight_name = air_data_path.parent.name
+    flight_name = meta_data_path.parent.name
 
     # Default JSON path
     if dem_json_path is None:
@@ -230,7 +232,27 @@ def validate_dem_coverage(air_data_path: Path,
     dem_max_y += margin_meters
 
     # Parse flight GPS coordinates
-    gps_coords = parse_airdata_gps(air_data_path)
+    if meta_data_path.suffix == '.csv':
+        gps_coords = parse_airdata_gps(meta_data_path)
+    elif meta_data_path.suffix == '.json':
+        gps_coords = []
+        with open(meta_data_path) as meta_data_file:
+            json_data = json.load(meta_data_file)
+            for image in json_data["images"]:
+                lat = image["lat"]
+                lng = image["lng"]
+                alt = image["location"][2]
+                gps_coords.append((lat, lng, alt))
+    elif meta_data_path.suffix == '.srt':
+        srtparser = SrtParser()
+        gps_coords = []
+        for frame in srtparser.parse_yield(str(meta_data_path)):
+            lat = frame.latitude
+            lng = frame.longitude
+            alt = frame.abs_alt
+            gps_coords.append((lat, lng, alt))
+    else:
+        raise Exception(f"Unsupported file extension: {meta_data_path.suffix}")
 
     if len(gps_coords) == 0:
         return ValidationResult(
@@ -417,9 +439,38 @@ def batch_validate(dataset_root: Path,
     return results
 
 if __name__ == '__main__':
-    result = validate_dem_coverage(
-        Path(r"C:\D\Projects\alfs_detection\testdata\haag\air_data.csv"),
-        Path(r"C:\D\Projects\alfs_detection\testdata\haag\dem_mesh_r2.glb"),
-        margin_meters=0.0
-    )
-    print_result(result)
+    # result = validate_dem_coverage(
+    #     Path(r"C:\D\Projects\alfs_detection\testdata\haag\air_data.csv"),
+    #     Path(r"C:\D\Projects\alfs_detection\testdata\haag\dem_mesh_r2.glb"),
+    #     margin_meters=0.0
+    # )
+    # print_result(result)
+
+    parent_folder = Path(r"Z:\correction_data")
+    correct_results = {}
+    incorrect_results = {}
+    glb_files = list(parent_folder.glob("*.glb"))
+    for glb_file in glb_files:
+        id_ = glb_file.stem.replace("_dem", "")
+        poses_json = glb_file.with_name(f"{id_}_matched_poses.json")
+        dem_json = glb_file.with_name(f"{id_}_dem_mesh_r2.json")
+
+        result = validate_dem_coverage(
+            poses_json,
+            glb_file,
+            dem_json,
+            margin_meters=0.0
+        )
+
+        if result.is_valid:
+            correct_results[id_] = result
+        else:
+            incorrect_results[id_] = result
+
+    if len(incorrect_results) > 0:
+        for key, item in incorrect_results.items():
+            print(key)
+            print_result(item)
+            print("="*60)
+    else:
+        print("All DEM correct!")
