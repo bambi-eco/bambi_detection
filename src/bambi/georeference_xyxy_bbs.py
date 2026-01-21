@@ -21,6 +21,9 @@ from src.bambi.util.projection_util import label_to_world_coordinates
 
 from pyproj import CRS, Transformer
 
+"""
+Allows to geo-reference bounding boxes in [x1, y1, x2, y2, conf, class] format
+"""
 
 def smooth_pose_positions(poses, window_size: int = 11):
     """

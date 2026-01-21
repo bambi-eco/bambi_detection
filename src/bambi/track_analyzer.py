@@ -396,18 +396,19 @@ Examples:
         """
     )
 
-    parser.add_argument("input", type=Path, help="Input file with track data")
-    parser.add_argument("-t", "--threshold", type=float, default=0.5,
-                        help="Distance threshold in meters (default: 0.5)")
+    parser.add_argument("--input", type=Path, help="Input file with track data",
+                        default=r"Z:\Hugo\mot_georeferenced\test\152_gt.txt")
+    parser.add_argument("-t", "--threshold", type=float, default=1.0,
+                        help="Distance threshold in meters (default: 1.0)")
     parser.add_argument("--min-outliers", type=int, default=None,
                         help="Minimum absolute number of outliers to be classified as 'moved'")
-    parser.add_argument("--min-outliers-ratio", type=float, default=None,
+    parser.add_argument("--min-outliers-ratio", type=float, default=0.2,
                         help="Minimum ratio of outliers (0.0-1.0) to be classified as 'moved'")
     parser.add_argument("--logic", choices=["or", "and"], default="or",
                         help="How to combine absolute and relative thresholds (default: or)")
     parser.add_argument("--use-3d", action="store_true",
                         help="Use 3D distances (including Z coordinate)")
-    parser.add_argument("-o", "--output", type=Path, default=None,
+    parser.add_argument("-o", "--output", type=Path, default=r"Z:\Hugo\mot_georeferenced\test\152_gt_classified.csv",
                         help="Output file path (CSV or JSON based on extension)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Show detailed output")
