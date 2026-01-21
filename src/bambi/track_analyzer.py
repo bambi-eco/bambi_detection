@@ -8,6 +8,10 @@ deviate beyond a threshold distance from the track's overall center.
 
 Input format (space or comma separated):
 <frame-idx> <track-id> <utm-x-min> <utm-y-min> <utm-z-min> <utm-x-max> <utm-y-max> <utm-z-max> <conf> <class> [<visibility>]
+
+Supports two modes:
+1. Single file mode: --input and --output for individual files
+2. Batch mode: --input-folder and --output-folder for processing entire directory trees
 """
 
 import argparse
@@ -210,6 +214,10 @@ def analyze_track(
         # Default: any outlier means moved
         is_moved = num_outliers > 0
 
+    # Extend center to 3D if needed
+    if len(track_center) == 2:
+        track_center = (track_center[0], track_center[1], 0.0)
+
     return TrackAnalysis(
         track_id=track_id,
         num_detections=len(detections),
@@ -229,25 +237,12 @@ def analyze_track(
 def analyze_all_tracks(
         tracks: Dict[int, List[Detection]],
         distance_threshold: float,
-        min_outliers_absolute: Optional[int],
-        min_outliers_relative: Optional[float],
+        min_outliers_absolute: Optional[int] = None,
+        min_outliers_relative: Optional[float] = None,
         use_3d: bool = False,
-        outlier_logic: str = "or"
+        outlier_logic: str = "and"
 ) -> Dict[int, TrackAnalysis]:
-    """
-    Analyze all tracks for movement.
-
-    Args:
-        tracks: Dictionary mapping track_id to list of detections
-        distance_threshold: Distance threshold in meters
-        min_outliers_absolute: Minimum absolute number of outliers
-        min_outliers_relative: Minimum relative ratio of outliers (0.0 - 1.0)
-        use_3d: Whether to use 3D distances
-        outlier_logic: "or" or "and" - how to combine absolute and relative thresholds
-
-    Returns:
-        Dictionary mapping track_id to TrackAnalysis
-    """
+    """Analyze all tracks in the dataset."""
     results = {}
 
     for track_id, detections in tracks.items():
@@ -350,7 +345,6 @@ def export_results(
                 f.write(f"{analysis.num_outliers},{analysis.outlier_ratio:.4f},")
                 f.write(f"{analysis.max_distance:.4f},{analysis.mean_distance:.4f},{analysis.std_distance:.4f},")
                 f.write(f"{center[0]:.4f},{center[1]:.4f},{center_z:.4f}\n")
-        print(f"\nResults exported to: {output_path}")
 
     elif format == "json":
         import json
@@ -370,78 +364,40 @@ def export_results(
             }
         with open(output_path, 'w') as f:
             json.dump(output, f, indent=2)
-        print(f"\nResults exported to: {output_path}")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze geo-referenced tracks for movement vs stability",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic usage with 0.5m threshold
-  python track_movement_analyzer.py tracks.txt -t 0.5
+def process_single_file(
+        input_path: Path,
+        output_path: Path,
+        args: argparse.Namespace,
+        verbose_print: bool = True
+) -> int:
+    """
+    Process a single input file and export results.
 
-  # Require at least 3 outliers to be considered "moved"
-  python track_movement_analyzer.py tracks.txt -t 0.5 --min-outliers 3
+    Args:
+        input_path: Path to the input file
+        output_path: Path to the output file
+        args: Parsed arguments containing analysis parameters
+        verbose_print: Whether to print detailed results
 
-  # Require at least 20%% of detections to be outliers
-  python track_movement_analyzer.py tracks.txt -t 0.5 --min-outliers-ratio 0.2
-
-  # Combine both thresholds with OR logic (either condition triggers "moved")
-  python track_movement_analyzer.py tracks.txt -t 0.5 --min-outliers 2 --min-outliers-ratio 0.1 --logic or
-
-  # Export results to CSV
-  python track_movement_analyzer.py tracks.txt -t 0.5 -o results.csv
-        """
-    )
-
-    parser.add_argument("--input", type=Path, help="Input file with track data",
-                        default=r"Z:\Hugo\mot_georeferenced\test\152_gt.txt")
-    parser.add_argument("-t", "--threshold", type=float, default=1.0,
-                        help="Distance threshold in meters (default: 1.0)")
-    parser.add_argument("--min-outliers", type=int, default=None,
-                        help="Minimum absolute number of outliers to be classified as 'moved'")
-    parser.add_argument("--min-outliers-ratio", type=float, default=0.2,
-                        help="Minimum ratio of outliers (0.0-1.0) to be classified as 'moved'")
-    parser.add_argument("--logic", choices=["or", "and"], default="or",
-                        help="How to combine absolute and relative thresholds (default: or)")
-    parser.add_argument("--use-3d", action="store_true",
-                        help="Use 3D distances (including Z coordinate)")
-    parser.add_argument("-o", "--output", type=Path, default=r"Z:\Hugo\mot_georeferenced\test\152_gt_classified.csv",
-                        help="Output file path (CSV or JSON based on extension)")
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="Show detailed output")
-
-    args = parser.parse_args()
-
-    # Validate input
-    if not args.input.exists():
-        print(f"Error: Input file not found: {args.input}")
+    Returns:
+        0 on success, 1 on failure
+    """
+    if not input_path.exists():
+        print(f"Error: Input file not found: {input_path}")
         return 1
-
-    if args.min_outliers_ratio is not None:
-        if not 0.0 <= args.min_outliers_ratio <= 1.0:
-            print("Error: --min-outliers-ratio must be between 0.0 and 1.0")
-            return 1
 
     # Load tracks
-    print(f"Loading tracks from: {args.input}")
-    tracks = load_tracks(args.input)
-    print(f"Loaded {len(tracks)} tracks")
+    if verbose_print:
+        print(f"Loading tracks from: {input_path}")
+    tracks = load_tracks(input_path)
+    if verbose_print:
+        print(f"Loaded {len(tracks)} tracks")
 
     if not tracks:
-        print("No tracks found in input file")
+        print(f"No tracks found in input file: {input_path}")
         return 1
-
-    # Print configuration
-    print(f"\nConfiguration:")
-    print(f"  Distance threshold: {args.threshold} m")
-    print(f"  Min outliers (absolute): {args.min_outliers if args.min_outliers else 'not set'}")
-    print(f"  Min outliers (relative): {f'{args.min_outliers_ratio:.1%}' if args.min_outliers_ratio else 'not set'}")
-    if args.min_outliers and args.min_outliers_ratio:
-        print(f"  Threshold logic: {args.logic.upper()}")
-    print(f"  Use 3D distances: {args.use_3d}")
 
     # Analyze tracks
     results = analyze_all_tracks(
@@ -453,15 +409,254 @@ Examples:
         outlier_logic=args.logic
     )
 
-    # Print results
-    print_results(results, verbose=args.verbose)
+    # Print results if verbose
+    if verbose_print and args.verbose:
+        print_results(results, verbose=args.verbose)
 
-    # Export if requested
-    if args.output:
-        format = "json" if args.output.suffix.lower() == ".json" else "csv"
-        export_results(results, args.output, format=format)
+    # Export results
+    if output_path:
+        output_format = "json" if output_path.suffix.lower() == ".json" else "csv"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        export_results(results, output_path, format=output_format)
+        if verbose_print:
+            print(f"Results exported to: {output_path}")
 
     return 0
+
+
+def process_folder(
+        input_folder: Path,
+        output_folder: Path,
+        output_suffix: str,
+        args: argparse.Namespace
+) -> int:
+    """
+    Process all .txt files in a folder recursively.
+
+    Args:
+        input_folder: Root input folder to search for .txt files
+        output_folder: Root output folder (mirrors input structure)
+        output_suffix: Output file suffix (e.g., 'csv' or 'json')
+        args: Parsed arguments containing analysis parameters
+
+    Returns:
+        0 on success, 1 if any file failed
+    """
+    if not input_folder.exists():
+        print(f"Error: Input folder not found: {input_folder}")
+        return 1
+
+    if not input_folder.is_dir():
+        print(f"Error: Input path is not a folder: {input_folder}")
+        return 1
+
+    # Find all .txt files recursively
+    txt_files = list(input_folder.rglob("*.txt"))
+
+    if not txt_files:
+        print(f"No .txt files found in: {input_folder}")
+        return 1
+
+    print(f"Found {len(txt_files)} .txt files in {input_folder}")
+    print(f"Output folder: {output_folder}")
+    print(f"Output format: {output_suffix}")
+    print()
+
+    # Print configuration once
+    print(f"Configuration:")
+    print(f"  Distance threshold: {args.threshold} m")
+    print(f"  Min outliers (absolute): {args.min_outliers if args.min_outliers else 'not set'}")
+    print(f"  Min outliers (relative): {f'{args.min_outliers_ratio:.1%}' if args.min_outliers_ratio else 'not set'}")
+    if args.min_outliers and args.min_outliers_ratio:
+        print(f"  Threshold logic: {args.logic.upper()}")
+    print(f"  Use 3D distances: {args.use_3d}")
+    print()
+
+    success_count = 0
+    fail_count = 0
+
+    for txt_file in sorted(txt_files):
+        # Calculate relative path from input folder
+        relative_path = txt_file.relative_to(input_folder)
+
+        # Create output path with new suffix
+        output_file = output_folder / relative_path.with_suffix(f".{output_suffix}")
+
+        print(f"Processing: {relative_path}")
+
+        result = process_single_file(
+            input_path=txt_file,
+            output_path=output_file,
+            args=args,
+            verbose_print=args.verbose  # Suppress per-file output in batch mode
+        )
+
+        if result == 0:
+            success_count += 1
+            print(f"  -> {output_file.relative_to(output_folder)}")
+        else:
+            fail_count += 1
+            print(f"  -> FAILED")
+
+    print()
+    print("=" * 70)
+    print(f"Batch processing complete:")
+    print(f"  Successful: {success_count}")
+    print(f"  Failed: {fail_count}")
+    print("=" * 70)
+
+    return 0 if fail_count == 0 else 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Analyze geo-referenced tracks for movement vs stability",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Single file mode - basic usage with 0.5m threshold
+  python track_analyzer.py --input tracks.txt -t 0.5 -o results.csv
+
+  # Single file mode - require at least 3 outliers to be considered "moved"
+  python track_analyzer.py --input tracks.txt -t 0.5 --min-outliers 3
+
+  # Single file mode - require at least 20%% of detections to be outliers
+  python track_analyzer.py --input tracks.txt -t 0.5 --min-outliers-ratio 0.2
+
+  # Batch folder mode - process all .txt files, output as CSV
+  python track_analyzer.py --input-folder ./mot --output-folder ./mot_analyzed -t 0.5
+
+  # Batch folder mode - output as JSON
+  python track_analyzer.py --input-folder ./mot --output-folder ./mot_analyzed --output-suffix json -t 0.5
+
+  # Batch folder mode with analysis options
+  python track_analyzer.py --input-folder ./mot --output-folder ./mot_analyzed -t 0.5 --min-outliers 2 --min-outliers-ratio 0.1 --logic or
+        """
+    )
+
+    import sys
+    sys.argv = [sys.argv[0],
+        "--input-folder", r"Z:\Hugo\mot_georeferenced",
+        "--output-folder", r"Z:\Hugo\mot_georeferenced",
+        "--output-suffix", "csv",
+        "-t", "1.0",
+        "--min-outliers-ratio", "0.2",
+        "--verbose"
+    ]
+
+    # Single file mode arguments
+    single_group = parser.add_argument_group('Single file mode')
+    single_group.add_argument("--input", type=Path,
+                              help="Input file with track data")
+    single_group.add_argument("-o", "--output", type=Path,
+                              help="Output file path (CSV or JSON based on extension)")
+
+    # Batch folder mode arguments
+    batch_group = parser.add_argument_group('Batch folder mode')
+    batch_group.add_argument("--input-folder", type=Path,
+                             help="Input folder to search for .txt files recursively")
+    batch_group.add_argument("--output-folder", type=Path,
+                             help="Output folder (will mirror input folder structure)")
+    batch_group.add_argument("--output-suffix", type=str, default="csv",
+                             choices=["csv", "json"],
+                             help="Output file suffix/format for batch mode (default: csv)")
+
+    # Analysis parameters (apply to both modes)
+    analysis_group = parser.add_argument_group('Analysis parameters')
+    analysis_group.add_argument("-t", "--threshold", type=float, default=1.0,
+                                help="Distance threshold in meters (default: 1.0)")
+    analysis_group.add_argument("--min-outliers", type=int, default=None,
+                                help="Minimum absolute number of outliers to be classified as 'moved'")
+    analysis_group.add_argument("--min-outliers-ratio", type=float, default=0.2,
+                                help="Minimum ratio of outliers (0.0-1.0) to be classified as 'moved'")
+    analysis_group.add_argument("--logic", choices=["or", "and"], default="or",
+                                help="How to combine absolute and relative thresholds (default: or)")
+    analysis_group.add_argument("--use-3d", action="store_true",
+                                help="Use 3D distances (including Z coordinate)")
+    analysis_group.add_argument("-v", "--verbose", action="store_true",
+                                help="Show detailed output")
+
+    args = parser.parse_args()
+
+    # Determine mode based on provided arguments
+    single_file_mode = args.input is not None
+    batch_mode = args.input_folder is not None
+
+    # Validate mode selection
+    if single_file_mode and batch_mode:
+        print("Error: Cannot use both single file mode (--input) and batch mode (--input-folder)")
+        print("Please use either --input/--output OR --input-folder/--output-folder")
+        return 1
+
+    if not single_file_mode and not batch_mode:
+        print("Error: Must specify either single file mode (--input) or batch mode (--input-folder)")
+        parser.print_help()
+        return 1
+
+    # Validate min_outliers_ratio
+    if args.min_outliers_ratio is not None:
+        if not 0.0 <= args.min_outliers_ratio <= 1.0:
+            print("Error: --min-outliers-ratio must be between 0.0 and 1.0")
+            return 1
+
+    # Process based on mode
+    if batch_mode:
+        # Batch folder mode
+        if args.output_folder is None:
+            print("Error: --output-folder is required when using --input-folder")
+            return 1
+
+        return process_folder(
+            input_folder=args.input_folder,
+            output_folder=args.output_folder,
+            output_suffix=args.output_suffix,
+            args=args
+        )
+    else:
+        # Single file mode
+        if not args.input.exists():
+            print(f"Error: Input file not found: {args.input}")
+            return 1
+
+        # Load tracks
+        print(f"Loading tracks from: {args.input}")
+        tracks = load_tracks(args.input)
+        print(f"Loaded {len(tracks)} tracks")
+
+        if not tracks:
+            print("No tracks found in input file")
+            return 1
+
+        # Print configuration
+        print(f"\nConfiguration:")
+        print(f"  Distance threshold: {args.threshold} m")
+        print(f"  Min outliers (absolute): {args.min_outliers if args.min_outliers else 'not set'}")
+        print(
+            f"  Min outliers (relative): {f'{args.min_outliers_ratio:.1%}' if args.min_outliers_ratio else 'not set'}")
+        if args.min_outliers and args.min_outliers_ratio:
+            print(f"  Threshold logic: {args.logic.upper()}")
+        print(f"  Use 3D distances: {args.use_3d}")
+
+        # Analyze tracks
+        results = analyze_all_tracks(
+            tracks=tracks,
+            distance_threshold=args.threshold,
+            min_outliers_absolute=args.min_outliers,
+            min_outliers_relative=args.min_outliers_ratio,
+            use_3d=args.use_3d,
+            outlier_logic=args.logic
+        )
+
+        # Print results
+        print_results(results, verbose=args.verbose)
+
+        # Export if requested
+        if args.output:
+            output_format = "json" if args.output.suffix.lower() == ".json" else "csv"
+            export_results(results, args.output, format=output_format)
+            print(f"\nResults exported to: {args.output}")
+
+        return 0
 
 
 if __name__ == "__main__":
