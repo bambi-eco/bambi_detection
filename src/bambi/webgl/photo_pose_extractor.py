@@ -498,6 +498,9 @@ class PhotoPoseExtractor:
             },
         }
 
+        if self._undistorter is not None:
+            result["mask"] = self._write_image_mask(output_image_dir)
+
         skipped = sum(1 for v in matches.values() if v is None)
         if skipped:
             print(
@@ -522,6 +525,16 @@ class PhotoPoseExtractor:
     # ------------------------------------------------------------------
     # undistortion
     # ------------------------------------------------------------------
+    def _write_image_mask(self, output_image_dir: str) -> str:
+        """Write a binary undistortion mask to *output_image_dir* and return the filename."""
+        filename = "mask.png"
+        path = os.path.join(output_image_dir, filename)
+        w, h = self._undistorter.new_size
+        mask = self._undistorter.create_distortion_mask(w, h)
+        mask[mask < 255] = 0
+        cv2.imwrite(path, mask)
+        return filename
+
     def _undistort_and_save(
         self, source_path: str, filename: str, output_dir: str
     ) -> str:
