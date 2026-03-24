@@ -314,6 +314,146 @@ class PhotoUndistorter:
         return self.undistort(img)
 
 
+def match_photos_to_airdata_unique(
+    image_paths: List[str],
+    airdata_csv: str,
+    photo_timezone_offset_hours: float = 1.0,
+    max_time_delta_seconds: float = 10.0,
+) -> Dict[str, Optional[AirDataFrame]]:
+    """
+    Match drone photos to AirData ``isPhoto`` frames by timestamp, ensuring
+    each frame is assigned to at most one image.
+
+    **Round 1** — for every image/frame pair within *max_time_delta_seconds*,
+    compute the absolute time difference.
+
+    **Round 2** — sort all candidates by that difference and assign greedily:
+    the globally closest pair is confirmed first; once a frame (or image) is
+    taken it is removed from consideration, so conflicting images
+    automatically fall through to their next-best unassigned frame.
+
+    :param image_paths: List of paths to the drone images.
+    :param airdata_csv: Path to the AirData CSV flight log.
+    :param photo_timezone_offset_hours: UTC offset of the camera clock.
+    :param max_time_delta_seconds: Maximum allowed time difference (seconds).
+    :return: Dict mapping each image basename to the best unique
+        :class:`AirDataFrame`, or ``None`` if no frame could be assigned.
+    """
+    parser = AirDataParser()
+    all_frames = parser.parse(airdata_csv)
+    photo_frames = [f for f in all_frames if f.isPhoto == 1]
+
+    if not photo_frames:
+        print(f"Warning: No isPhoto frames found in {airdata_csv}")
+        return {os.path.basename(p): None for p in image_paths}
+
+    # Deduplicate by datetime — airdata logs sometimes emit multiple isPhoto
+    # rows with identical timestamps, which would create phantom extra slots.
+    seen_times: set = set()
+    deduped: List[AirDataFrame] = []
+    for f in photo_frames:
+        if f.datetime not in seen_times:
+            seen_times.add(f.datetime)
+            deduped.append(f)
+    if len(deduped) < len(photo_frames):
+        print(
+            f"Info: Removed {len(photo_frames) - len(deduped)} duplicate "
+            f"isPhoto frames (same timestamp)."
+        )
+    photo_frames = deduped
+
+    max_delta = datetime.timedelta(seconds=max_time_delta_seconds)
+
+    # Collect timestamps for all images
+    image_timestamps: Dict[str, Optional[datetime.datetime]] = {}
+    for image_path in image_paths:
+        basename = os.path.basename(image_path)
+        photo_utc = get_photo_timestamp(image_path, photo_timezone_offset_hours)
+        if photo_utc is None:
+            print(f"Warning: Could not extract timestamp from '{basename}'")
+        image_timestamps[basename] = photo_utc
+
+    # Round 1: build all valid (diff, image, frame) candidates
+    candidates: List[Tuple[datetime.timedelta, str, AirDataFrame]] = []
+    for basename, photo_utc in image_timestamps.items():
+        if photo_utc is None:
+            continue
+        for frame in photo_frames:
+            diff = abs(frame.datetime - photo_utc)
+            if diff <= max_delta:
+                candidates.append((diff, basename, frame))
+
+    # Round 2: greedy best-first assignment — closest pair wins
+    candidates.sort(key=lambda x: x[0])
+
+    assigned_images: set = set()
+    assigned_frame_ids: set = set()
+    result: Dict[str, Optional[AirDataFrame]] = {}
+
+    for diff, basename, frame in candidates:
+        if basename not in assigned_images and id(frame) not in assigned_frame_ids:
+            result[basename] = frame
+            assigned_images.add(basename)
+            assigned_frame_ids.add(id(frame))
+
+    # Mark unmatched images
+    for basename, photo_utc in image_timestamps.items():
+        if basename not in result:
+            if photo_utc is not None:
+                print(
+                    f"Warning: No unique isPhoto frame for '{basename}' "
+                    f"within {max_time_delta_seconds}s"
+                )
+            result[basename] = None
+
+    return result
+
+
+def match_photos_to_airdata_ordered(
+    image_paths: List[str],
+    airdata_csv: str,
+) -> Dict[str, Optional[AirDataFrame]]:
+    """
+    Match a list of drone photos to AirData flight-log entries by position.
+
+    The *i*-th image (sorted by path) is paired with the *i*-th
+    ``isPhoto == 1`` frame in the log, regardless of timestamps.
+
+    :param image_paths: List of paths to the drone images (will be sorted).
+    :param airdata_csv: Path to the AirData CSV flight log.
+    :return: Dict mapping each image *filename* (basename) to the
+        corresponding :class:`AirDataFrame`, or ``None`` if there are more
+        images than isPhoto frames.
+    """
+    parser = AirDataParser()
+    all_frames = parser.parse(airdata_csv)
+    photo_frames = [f for f in all_frames if f.isPhoto == 1]
+
+    if not photo_frames:
+        print(f"Warning: No isPhoto frames found in {airdata_csv}")
+        return {os.path.basename(p): None for p in image_paths}
+
+    result: Dict[str, Optional[AirDataFrame]] = {}
+    for i, image_path in enumerate(image_paths):
+        basename = os.path.basename(image_path)
+        if i < len(photo_frames):
+            result[basename] = photo_frames[i]
+        else:
+            print(
+                f"Warning: No isPhoto frame for '{basename}' "
+                f"(only {len(photo_frames)} isPhoto frames available)"
+            )
+            result[basename] = None
+
+    if len(photo_frames) > len(image_paths):
+        print(
+            f"Warning: {len(photo_frames)} isPhoto frames but only "
+            f"{len(image_paths)} images — trailing frames are unused."
+        )
+
+    return result
+
+
 class PhotoPoseExtractor:
     """
     Extracts camera poses for a set of drone photos and writes a
@@ -677,3 +817,242 @@ class PhotoPoseExtractor:
             entry["lng"] = frame.longitude
 
         return entry
+
+
+class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
+    """
+    Like :class:`PhotoPoseExtractor` but matches images to AirData entries
+    by position rather than timestamp.
+
+    The *i*-th image (sorted alphabetically) is paired with the *i*-th
+    ``isPhoto == 1`` frame in the flight log, ignoring the camera clock
+    entirely.  This is useful when timestamps in the filename or EXIF are
+    unreliable or misaligned.
+    """
+
+    def extract(
+        self,
+        photo_dir: str,
+        airdata_csv: str,
+        output_path: str,
+        output_image_dir: Optional[str] = None,
+        photo_timezone_offset_hours: float = 1.0,
+        max_time_delta_seconds: float = 10.0,
+        origin: Optional[AirDataFrame] = None,
+        origin_lat: Optional[float] = None,
+        origin_lon: Optional[float] = None,
+        origin_alt: Optional[float] = None,
+        extensions: Tuple[str, ...] = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
+                                        "*.tiff", "*.TIFF", "*.png", "*.PNG"),
+    ) -> Dict[str, Any]:
+        if self._undistorter is not None and output_image_dir is None:
+            raise ValueError(
+                "output_image_dir is required when calibration_res is "
+                "provided (undistorted images need to be written somewhere)."
+            )
+
+        # -- collect image paths ------------------------------------------
+        image_paths: List[str] = []
+        for ext in extensions:
+            image_paths.extend(glob.glob(os.path.join(photo_dir, ext)))
+        image_paths = sorted(set(image_paths))
+
+        if not image_paths:
+            raise FileNotFoundError(
+                f"No image files found in '{photo_dir}' "
+                f"(extensions: {extensions})"
+            )
+
+        basename_to_path = {os.path.basename(p): p for p in image_paths}
+
+        # -- match by position (i-th image → i-th isPhoto frame) ----------
+        matches = match_photos_to_airdata_ordered(
+            image_paths=image_paths,
+            airdata_csv=airdata_csv,
+        )
+
+        # -- resolve origin -----------------------------------------------
+        origin_frame = self._resolve_origin(
+            origin, origin_lat, origin_lon, origin_alt, matches
+        )
+        origin_transformed = self.rel_transformer.transform(
+            origin_frame.latitude, origin_frame.longitude
+        )
+
+        # -- prepare output image directory if undistorting ----------------
+        if self._undistorter is not None:
+            os.makedirs(output_image_dir, exist_ok=True)
+
+        # -- build image entries sorted by frame order --------------------
+        matched_items = [
+            (filename, frame)
+            for filename, frame in matches.items()
+            if frame is not None
+        ]
+        matched_items.sort(key=lambda item: item[1].datetime)
+
+        images: List[Dict[str, Any]] = []
+        for filename, frame in matched_items:
+            if self._undistorter is not None:
+                source_path = basename_to_path[filename]
+                self._undistort_and_save(source_path, filename, output_image_dir)
+
+            entry = self._build_image_entry(
+                filename, frame, origin_frame, origin_transformed
+            )
+            images.append(entry)
+
+        result: Dict[str, Any] = {
+            "images": images,
+            "origin": {
+                "latitude": origin_frame.latitude,
+                "longitude": origin_frame.longitude,
+                "altitude": origin_frame.altitude,
+            },
+        }
+
+        if self._undistorter is not None:
+            result["mask"] = self._write_image_mask(output_image_dir)
+
+        skipped = sum(1 for v in matches.values() if v is None)
+        if skipped:
+            print(
+                f"Info: {skipped}/{len(matches)} photos could not be matched "
+                f"and were skipped."
+            )
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="UTF-8") as fh:
+            json.dump(result, fh, indent=2)
+
+        fovy_source = "calibration" if self._undistorter else "manual"
+        print(
+            f"Wrote {len(images)} photo poses to '{output_path}' "
+            f"(origin: {origin_frame.latitude:.7f}, "
+            f"{origin_frame.longitude:.7f} | "
+            f"fovy: {self.fovy:.2f} deg [{fovy_source}])"
+        )
+        return result
+
+
+class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
+    """
+    Like :class:`PhotoPoseExtractor` but guarantees that each ``isPhoto``
+    AirData frame is assigned to at most one image.
+
+    Matching is done in two rounds (see
+    :func:`match_photos_to_airdata_unique`):
+
+    1. All (image, frame) pairs within *max_time_delta_seconds* are scored
+       by absolute timestamp difference.
+    2. Pairs are assigned greedily from the globally smallest difference
+       outward — when two images compete for the same frame the closer one
+       wins, and the other automatically falls through to its next-best
+       unassigned frame.
+    """
+
+    def extract(
+        self,
+        photo_dir: str,
+        airdata_csv: str,
+        output_path: str,
+        output_image_dir: Optional[str] = None,
+        photo_timezone_offset_hours: float = 1.0,
+        max_time_delta_seconds: float = 10.0,
+        origin: Optional[AirDataFrame] = None,
+        origin_lat: Optional[float] = None,
+        origin_lon: Optional[float] = None,
+        origin_alt: Optional[float] = None,
+        extensions: Tuple[str, ...] = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
+                                        "*.tiff", "*.TIFF", "*.png", "*.PNG"),
+    ) -> Dict[str, Any]:
+        if self._undistorter is not None and output_image_dir is None:
+            raise ValueError(
+                "output_image_dir is required when calibration_res is "
+                "provided (undistorted images need to be written somewhere)."
+            )
+
+        # -- collect image paths ------------------------------------------
+        image_paths: List[str] = []
+        for ext in extensions:
+            image_paths.extend(glob.glob(os.path.join(photo_dir, ext)))
+        image_paths = sorted(set(image_paths))
+
+        if not image_paths:
+            raise FileNotFoundError(
+                f"No image files found in '{photo_dir}' "
+                f"(extensions: {extensions})"
+            )
+
+        basename_to_path = {os.path.basename(p): p for p in image_paths}
+
+        # -- unique timestamp-based matching (two-round) ------------------
+        matches = match_photos_to_airdata_unique(
+            image_paths=image_paths,
+            airdata_csv=airdata_csv,
+            photo_timezone_offset_hours=photo_timezone_offset_hours,
+            max_time_delta_seconds=max_time_delta_seconds,
+        )
+
+        # -- resolve origin -----------------------------------------------
+        origin_frame = self._resolve_origin(
+            origin, origin_lat, origin_lon, origin_alt, matches
+        )
+        origin_transformed = self.rel_transformer.transform(
+            origin_frame.latitude, origin_frame.longitude
+        )
+
+        # -- prepare output image directory if undistorting ----------------
+        if self._undistorter is not None:
+            os.makedirs(output_image_dir, exist_ok=True)
+
+        # -- build image entries sorted by timestamp ----------------------
+        matched_items = [
+            (filename, frame)
+            for filename, frame in matches.items()
+            if frame is not None
+        ]
+        matched_items.sort(key=lambda item: item[1].datetime)
+
+        images: List[Dict[str, Any]] = []
+        for filename, frame in matched_items:
+            if self._undistorter is not None:
+                source_path = basename_to_path[filename]
+                self._undistort_and_save(source_path, filename, output_image_dir)
+
+            entry = self._build_image_entry(
+                filename, frame, origin_frame, origin_transformed
+            )
+            images.append(entry)
+
+        result: Dict[str, Any] = {
+            "images": images,
+            "origin": {
+                "latitude": origin_frame.latitude,
+                "longitude": origin_frame.longitude,
+                "altitude": origin_frame.altitude,
+            },
+        }
+
+        if self._undistorter is not None:
+            result["mask"] = self._write_image_mask(output_image_dir)
+
+        skipped = sum(1 for v in matches.values() if v is None)
+        if skipped:
+            print(
+                f"Info: {skipped}/{len(matches)} photos could not be matched "
+                f"and were skipped."
+            )
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="UTF-8") as fh:
+            json.dump(result, fh, indent=2)
+
+        fovy_source = "calibration" if self._undistorter else "manual"
+        print(
+            f"Wrote {len(images)} photo poses to '{output_path}' "
+            f"(origin: {origin_frame.latitude:.7f}, "
+            f"{origin_frame.longitude:.7f} | "
+            f"fovy: {self.fovy:.2f} deg [{fovy_source}])"
+        )
+        return result
