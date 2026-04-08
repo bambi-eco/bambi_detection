@@ -67,7 +67,7 @@ class UltralyticsYoloDetector(Detection):
                     prop = float(box.conf.item())
                     if prop >= self._min_confidence:
                         cls = prediction.names[int(box.cls.item())]
-                        xyxy = box.xyxy.numpy()
+                        xyxy = box.xyxy.cpu().numpy()
                         bb = BoundingBox(idx, float(xyxy[0, 0]), float(xyxy[0, 1]), float(xyxy[0, 2]),
                                          float(xyxy[0, 3]), cls, prop, False, None, "")
                         frame_boxes.append(bb)
