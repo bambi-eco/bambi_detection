@@ -217,6 +217,11 @@ class PhotoUndistorter:
     # properties
     # ------------------------------------------------------------------
     @property
+    def is_initialized(self) -> bool:
+        """True after :meth:`undistort` (or :meth:`prepare`) has been called."""
+        return self._is_initialized
+
+    @property
     def fovy(self) -> float:
         """Vertical field of view in degrees, derived from the new camera
         matrix and the undistorted image height."""
@@ -521,9 +526,15 @@ class PhotoPoseExtractor:
             )
 
     @property
-    def fovy(self) -> float:
-        """Effective vertical field of view (from calibration or manual)."""
+    def fovy(self) -> Optional[float]:
+        """Effective vertical field of view (from calibration or manual).
+
+        Returns ``None`` when calibration is present but no image has been
+        undistorted yet (i.e. :class:`PhotoUndistorter` not yet initialised).
+        """
         if self._undistorter is not None:
+            if not self._undistorter.is_initialized:
+                return None
             return self._undistorter.fovy
         return self._manual_fovy
 
@@ -639,7 +650,9 @@ class PhotoPoseExtractor:
         }
 
         if self._undistorter is not None:
-            result["mask"] = self._write_image_mask(output_image_dir)
+            mask = self._write_image_mask(output_image_dir)
+            if mask is not None:
+                result["mask"] = mask
 
         skipped = sum(1 for v in matches.values() if v is None)
         if skipped:
@@ -654,19 +667,27 @@ class PhotoPoseExtractor:
             json.dump(result, fh, indent=2)
 
         fovy_source = "calibration" if self._undistorter else "manual"
+        _fovy = self.fovy
+        fovy_str = f"{_fovy:.2f} deg [{fovy_source}]" if _fovy is not None else "unknown (no images processed)"
         print(
             f"Wrote {len(images)} photo poses to '{output_path}' "
             f"(origin: {origin_frame.latitude:.7f}, "
             f"{origin_frame.longitude:.7f} | "
-            f"fovy: {self.fovy:.2f} deg [{fovy_source}])"
+            f"fovy: {fovy_str})"
         )
         return result
 
     # ------------------------------------------------------------------
     # undistortion
     # ------------------------------------------------------------------
-    def _write_image_mask(self, output_image_dir: str) -> str:
-        """Write a binary undistortion mask to *output_image_dir* and return the filename."""
+    def _write_image_mask(self, output_image_dir: str) -> Optional[str]:
+        """Write a binary undistortion mask to *output_image_dir* and return the filename.
+
+        Returns ``None`` if the undistorter has not been initialised yet (i.e.
+        no images were processed), in which case no mask file is written.
+        """
+        if self._undistorter is None or self._undistorter.new_size is None:
+            return None
         filename = "mask.png"
         path = os.path.join(output_image_dir, filename)
         w, h = self._undistorter.new_size
@@ -912,7 +933,9 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
         }
 
         if self._undistorter is not None:
-            result["mask"] = self._write_image_mask(output_image_dir)
+            mask = self._write_image_mask(output_image_dir)
+            if mask is not None:
+                result["mask"] = mask
 
         skipped = sum(1 for v in matches.values() if v is None)
         if skipped:
@@ -926,11 +949,13 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
             json.dump(result, fh, indent=2)
 
         fovy_source = "calibration" if self._undistorter else "manual"
+        _fovy = self.fovy
+        fovy_str = f"{_fovy:.2f} deg [{fovy_source}]" if _fovy is not None else "unknown (no images processed)"
         print(
             f"Wrote {len(images)} photo poses to '{output_path}' "
             f"(origin: {origin_frame.latitude:.7f}, "
             f"{origin_frame.longitude:.7f} | "
-            f"fovy: {self.fovy:.2f} deg [{fovy_source}])"
+            f"fovy: {fovy_str})"
         )
         return result
 
@@ -1035,7 +1060,9 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
         }
 
         if self._undistorter is not None:
-            result["mask"] = self._write_image_mask(output_image_dir)
+            mask = self._write_image_mask(output_image_dir)
+            if mask is not None:
+                result["mask"] = mask
 
         skipped = sum(1 for v in matches.values() if v is None)
         if skipped:
@@ -1049,10 +1076,12 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
             json.dump(result, fh, indent=2)
 
         fovy_source = "calibration" if self._undistorter else "manual"
+        _fovy = self.fovy
+        fovy_str = f"{_fovy:.2f} deg [{fovy_source}]" if _fovy is not None else "unknown (no images processed)"
         print(
             f"Wrote {len(images)} photo poses to '{output_path}' "
             f"(origin: {origin_frame.latitude:.7f}, "
             f"{origin_frame.longitude:.7f} | "
-            f"fovy: {self.fovy:.2f} deg [{fovy_source}])"
+            f"fovy: {fovy_str})"
         )
         return result
