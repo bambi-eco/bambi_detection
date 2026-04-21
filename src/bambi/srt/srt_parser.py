@@ -103,6 +103,25 @@ class SrtParser:
             line = line.strip()
 
             if len(line) == 0:
+                # New format (M4T): empty line signals end of frame block.
+                # Old format resets state via </font> before any blank line, so
+                # found_meta_timestamp=True here unambiguously means new format.
+                if found_meta_timestamp:
+                    current_meta = dict()
+                    additional_meta_information = additional_meta_information.replace(
+                        "],", "]"
+                    )
+                    self._parse_meta_information(additional_meta_information, current_meta)
+                    for k, v in current_meta.items():
+                        current_frame.__dict__[k] = v
+                    found_id = False
+                    found_timestamp = False
+                    found_meta_start = False
+                    found_meta_timestamp = False
+                    additional_meta_information = ""
+                    if current_frame is not None and num_of_frames > skip:
+                        yield current_frame
+                        accepted_frames += 1
                 continue
 
             if not found_id:
@@ -119,18 +138,40 @@ class SrtParser:
                     splits[1].strip(), "%H:%M:%S,%f"
                 ).time()
                 found_timestamp = True
-            elif not found_meta_start and "<font size=" in line:
-                idx = line.index(">")
-                line = line[idx:]
-                infostart = line.index("FrameCnt")
-                line = line[infostart:]
-                splits = line.split(",")
-                for split in splits:
-                    (key, value) = split.split(":")
-                    current_frame.__dict__[key.strip()] = self.__parse_value(value)
-                found_meta_start = True
+            elif not found_meta_start:
+                try:
+                    # Try old format: <font size="28">FrameCnt: 0, ...
+                    idx = line.index("<font size=")
+                    idx = line.index(">", idx)
+                    line = line[idx + 1:]
+                    infostart = line.index("FrameCnt")
+                    line = line[infostart:]
+                    splits = line.split(",")
+                    for split in splits:
+                        (key, value) = split.split(":")
+                        current_frame.__dict__[key.strip()] = self.__parse_value(value)
+                    found_meta_start = True
+                except (ValueError, IndexError):
+                    # New format (M4T): FrameCnt: 0 2026-04-21 15:14:18.938
+                    match = re.match(
+                        r"FrameCnt:\s*(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[.,]\d+)",
+                        line,
+                    )
+                    if match:
+                        current_frame.__dict__["FrameCnt"] = int(match.group(1))
+                        ts_str = match.group(2)[:23]
+                        try:
+                            current_frame.timestamp = datetime.datetime.strptime(
+                                ts_str, "%Y-%m-%d %H:%M:%S,%f"
+                            )
+                        except ValueError:
+                            current_frame.timestamp = datetime.datetime.strptime(
+                                ts_str, "%Y-%m-%d %H:%M:%S.%f"
+                            )
+                        found_meta_start = True
+                        found_meta_timestamp = True
             elif not found_meta_timestamp:
-                # frame line contains timestamp removing , in millis
+                # Old format only: standalone timestamp line after FrameCnt line
                 line = line[:23]
                 try:
                     current_frame.timestamp = datetime.datetime.strptime(
