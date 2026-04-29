@@ -211,6 +211,7 @@ class PhotoUndistorter:
         self._mapy: Optional[npt.NDArray[Any]] = None
         self._new_camera_matrix: Optional[npt.NDArray[Any]] = None
         self._new_size: Optional[Tuple[int, int]] = None
+        self._input_size: Optional[Tuple[int, int]] = None
         self._is_initialized = False
 
     # ------------------------------------------------------------------
@@ -254,6 +255,7 @@ class PhotoUndistorter:
         :param img_size: ``(width, height)`` of the source images.
         """
         w, h = img_size
+        self._input_size = (w, h)
 
         # Determine target size
         if self._requested_new_size is not None:
@@ -315,7 +317,12 @@ class PhotoUndistorter:
     ) -> npt.NDArray[Any]:
         """Create a binary mask showing which pixels are valid after
         undistortion."""
-        img = np.full((height, width), 255, dtype=np.uint8)
+        # The remap maps point into the original (input) image coordinate
+        # space, so the source canvas must be the original input size.
+        # Using new_size here would clip pixels whose mapped coordinates
+        # exceed new_size, producing a mask that doesn't match the frames.
+        iw, ih = self._input_size if self._input_size is not None else (width, height)
+        img = np.full((ih, iw), 255, dtype=np.uint8)
         return self.undistort(img)
 
 
