@@ -18,6 +18,7 @@ from dateutil import tz
 
 from bambi.airdata.air_data_parser import AirDataParser
 from bambi.airdata.air_data_frame import AirDataFrame
+from bambi.thermal.thermal_colorizer import ThermalColorizer
 
 # DJI filename pattern: DJI_YYYYMMDDHHMMSS_NNNN_X.JPG (or .jpg)
 DJI_FILENAME_PATTERN = re.compile(
@@ -458,6 +459,7 @@ def match_photos_to_airdata_ordered(
             result[basename] = None
 
     if len(photo_frames) > len(image_paths):
+
         print(
             f"Warning: {len(photo_frames)} isPhoto frames but only "
             f"{len(image_paths)} images — trailing frames are unused."
@@ -489,6 +491,7 @@ class PhotoPoseExtractor:
         apply_correction: bool = False,
         include_gps: bool = True,
         mask_images: bool = False,
+        thermal_colorizer: Optional[ThermalColorizer] = None,
     ):
         """
         :param rel_transformer: Transforms WGS-84 (lat, lon) to projected CRS.
@@ -508,10 +511,21 @@ class PhotoPoseExtractor:
         :param include_gps: Include ``lat``/``lng`` in per-image entries.
         :param mask_images: Write an alpha channel masking invalid (black)
             undistortion border pixels.
+        :param thermal_colorizer: Optional :class:`ThermalColorizer`.  When
+            supplied, source images are decoded as radiometric thermal JPEGs
+            via the colorizer's *parse_fn* and colourised before undistortion,
+            rather than being read as ordinary RGB images with ``cv2.imread``.
+            Requires *calibration_res* to also be set (images are only written
+            to *output_image_dir* when an undistorter is active).
         """
         if calibration_res is None and fovy is None:
             raise ValueError(
                 "Either 'fovy' or 'calibration_res' must be provided."
+            )
+        if thermal_colorizer is not None and calibration_res is None:
+            raise ValueError(
+                "thermal_colorizer requires calibration_res: images are only "
+                "written to output_image_dir when an undistorter is active."
             )
 
         self.rel_transformer = rel_transformer
@@ -519,6 +533,7 @@ class PhotoPoseExtractor:
         self.apply_correction = apply_correction
         self.include_gps = include_gps
         self.mask_images = mask_images
+        self._thermal_colorizer = thermal_colorizer
 
         # Build undistorter if calibration is available
         self._undistorter: Optional[PhotoUndistorter] = None
@@ -707,8 +722,16 @@ class PhotoPoseExtractor:
         self, source_path: str, filename: str, output_dir: str
     ) -> str:
         """Load an image, undistort it, optionally apply alpha mask, and
-        save to *output_dir*.  Returns the output path."""
-        img = cv2.imread(source_path, cv2.IMREAD_UNCHANGED)
+        save to *output_dir*.  Returns the output path.
+
+        When a :class:`ThermalColorizer` is configured, the source image is
+        decoded as a radiometric thermal JPEG and colourised before
+        undistortion instead of being read as an ordinary BGR image.
+        """
+        if self._thermal_colorizer is not None:
+            img = self._thermal_colorizer.load_as_bgr(source_path)
+        else:
+            img = cv2.imread(source_path, cv2.IMREAD_UNCHANGED)
         if img is None:
             raise IOError(f"Could not read image: {source_path}")
 
