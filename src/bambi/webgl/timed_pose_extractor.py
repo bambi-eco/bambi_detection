@@ -52,11 +52,15 @@ class TimedFrameExtractorCallback:
     target_folder: str
     extension: str = "jpg"
     overwrite_existing: bool = False
+    selected_indices: Optional[set] = None  # None means all indices are processed
 
     def __call__(self, idx: int, img: npt.NDArray[Any]) -> bool:
 
         if len(self.srt_frames) <= idx:
-            return False  # skip
+            return False  # stop — no matching SRT frame
+
+        if self.selected_indices is not None and idx not in self.selected_indices:
+            return True  # not selected; skip frame but continue iterating
 
         frame = self.srt_frames[idx]
         frame_idx = frame.id
@@ -408,9 +412,9 @@ class TimedPoseExtractor:
         air_data_path: str,
         video_paths: Union[str, Sequence[str]],
         srt_data_paths: Union[str, Sequence[str]],
-        skip: datetime.timedelta = datetime.timedelta(seconds=0),
-        sampling_rate: datetime.timedelta = datetime.timedelta(seconds=0),
-        limit: datetime.timedelta = datetime.timedelta(seconds=-1),
+        skip: int = 0,
+        sampling_rate: int = 0,
+        limit: Optional[int] = None,
         gps_writer: Optional[GpsExifWriter] = None,
         include_gps: bool = True,
         include_time: bool = True,
@@ -437,8 +441,6 @@ class TimedPoseExtractor:
         :param remove_duplicates: Flag that signals if duplicate frames should be removed. default is True.
         :return:
         """
-        _ = skip, sampling_rate, limit, gps_writer
-
         if isinstance(video_paths, str):
             video_paths = (video_paths,)
         if isinstance(srt_data_paths, str):
@@ -454,13 +456,39 @@ class TimedPoseExtractor:
         start_frame, ad_frames = self.get_air_data_frames(air_data_path, srt_frames[0].timestamp)
         srt_frames, ad_frames, conv_ranges = self.adapt_srt_air_data_frames(srt_frames, ad_frames, start_frame)
 
+        # Compute which global frame indices (across all videos) are selected after applying
+        # skip/sampling_rate/limit. This must happen after alignment so the indices reflect
+        # the actual aligned timeline rather than raw video frame counts.
+        global_indices = list(range(len(srt_frames)))
+        if skip > 0:
+            global_indices = global_indices[skip:]
+        if sampling_rate > 0:
+            global_indices = global_indices[::sampling_rate]
+        if limit is not None:
+            global_indices = global_indices[:limit]
+        selected_global = set(global_indices)
+
         check_duplicate_func = (
             image_equality_check if self.camera_name == Camera.Thermal and remove_duplicates
             else None
         )
 
+        frame_to_video_arr = np.array(frame_to_video)
         for iv, video_path in enumerate(video_paths):
-            srt_video_frames = np.array(srt_frames)[np.array(frame_to_video) == iv]
+            video_global_indices = np.where(frame_to_video_arr == iv)[0]
+
+            # Map selected global indices to local (per-video) frame indices
+            selected_local: Optional[set] = set(
+                local_i for local_i, global_i in enumerate(video_global_indices)
+                if global_i in selected_global
+            )
+            if len(selected_local) == len(video_global_indices):
+                selected_local = None  # all frames selected — no need to filter
+
+            if selected_local is not None and len(selected_local) == 0:
+                continue  # no frames selected for this video
+
+            srt_video_frames = np.array(srt_frames)[frame_to_video_arr == iv]
 
             # create callback that is called for every frame
             callback = TimedFrameExtractorCallback(
@@ -471,6 +499,7 @@ class TimedPoseExtractor:
                 camera_name=self.camera_name,
                 target_folder=target_folder,
                 overwrite_existing=overwrite_existing,
+                selected_indices=selected_local,
             )
 
             self.frame_accessor.access(
@@ -529,6 +558,18 @@ class TimedPoseExtractor:
             if include_time and frame.datetime is not None:
                 current_dict["timestamp"] = frame.datetime.isoformat()
 
+            if gps_writer is not None:
+                image_path = os.path.join(target_folder, image_file)
+                gps_writer.write_gps(
+                    image_path,
+                    lng=frame.longitude or 0.0,
+                    lat=frame.latitude or 0.0,
+                    alt=frame.altitude or 0.0,
+                    camera_manufacturer="DJI",
+                    camera=Camera.fullname(self.camera_name) if self.camera_name else "",
+                    timestamp=frame.datetime,
+                )
+
             images.append(current_dict)
 
         res = dict()
@@ -536,7 +577,7 @@ class TimedPoseExtractor:
         res["origin"] = {"latitude": origin.latitude, "longitude": origin.longitude, "altitude": origin.altitude}
         res["drone"] = ("Unknown" if self.drone_name is None else Drone.product_name(self.drone_name))
         res["camera"] = ("Unknown" if self.camera_name is None else Camera.fullname(self.camera_name))
-        res["samplingRate"] = 0
+        res["samplingRate"] = sampling_rate
 
         if mask_images and isinstance(self.frame_accessor, CalibratedVideoFrameAccessor):
             res["mask"] = self._write_image_mask(target_folder, overwrite_existing)
