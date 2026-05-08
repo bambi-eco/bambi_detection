@@ -581,6 +581,8 @@ class PhotoPoseExtractor:
         origin_alt: Optional[float] = None,
         extensions: Tuple[str, ...] = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
                                         "*.tiff", "*.TIFF", "*.png", "*.PNG"),
+        skip: int = 0,
+        limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Match photos to AirData entries, optionally undistort them, and
@@ -598,6 +600,8 @@ class PhotoPoseExtractor:
         :param origin_lon: Longitude of the coordinate origin (WGS-84).
         :param origin_alt: Altitude of the origin (m above sea level).
         :param extensions: Glob patterns for image files to include.
+        :param skip: Number of matched photos (sorted by time) to skip from the start.
+        :param limit: Maximum number of photos to process after skipping.
         :return: The poses dict (same object written to disk).
         """
         if self._undistorter is not None and output_image_dir is None:
@@ -648,6 +652,10 @@ class PhotoPoseExtractor:
             if frame is not None
         ]
         matched_items.sort(key=lambda item: item[1].datetime)
+        if skip > 0:
+            matched_items = matched_items[skip:]
+        if limit is not None:
+            matched_items = matched_items[:limit]
 
         images: List[Dict[str, Any]] = []
         for filename, frame in matched_items:
@@ -895,6 +903,8 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
         origin_alt: Optional[float] = None,
         extensions: Tuple[str, ...] = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
                                         "*.tiff", "*.TIFF", "*.png", "*.PNG"),
+        skip: int = 0,
+        limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         if self._undistorter is not None and output_image_dir is None:
             raise ValueError(
@@ -941,6 +951,10 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
             if frame is not None
         ]
         matched_items.sort(key=lambda item: item[1].datetime)
+        if skip > 0:
+            matched_items = matched_items[skip:]
+        if limit is not None:
+            matched_items = matched_items[:limit]
 
         images: List[Dict[str, Any]] = []
         for filename, frame in matched_items:
@@ -1020,6 +1034,8 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
         origin_alt: Optional[float] = None,
         extensions: Tuple[str, ...] = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
                                         "*.tiff", "*.TIFF", "*.png", "*.PNG"),
+        skip: int = 0,
+        limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         if self._undistorter is not None and output_image_dir is None:
             raise ValueError(
@@ -1068,6 +1084,10 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
             if frame is not None
         ]
         matched_items.sort(key=lambda item: item[1].datetime)
+        if skip > 0:
+            matched_items = matched_items[skip:]
+        if limit is not None:
+            matched_items = matched_items[:limit]
 
         images: List[Dict[str, Any]] = []
         for filename, frame in matched_items:
