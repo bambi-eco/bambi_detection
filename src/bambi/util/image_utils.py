@@ -1,8 +1,39 @@
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
 import numpy.typing as npt
+
+
+def get_exif_data(image_path: str) -> Dict[str, Any]:
+    """
+    Extract all EXIF metadata from an image using Pillow.
+
+    GPS sub-IFD tags are expanded into a nested dict with human-readable
+    key names (e.g. ``"GPSLatitude"``, ``"GPSLongitude"``).
+
+    :param image_path: Path to the image file.
+    :return: Dict mapping EXIF tag names to their values, or an empty dict
+             if the image contains no EXIF data.
+    """
+    from PIL import Image
+    from PIL.ExifTags import GPSTAGS, TAGS
+
+    img = Image.open(image_path)
+    raw = img.getexif()
+    if not raw:
+        return {}
+
+    result: Dict[str, Any] = {}
+    for tag_id, value in raw.items():
+        name = TAGS.get(tag_id, str(tag_id))
+        result[name] = value
+
+    gps_ifd = raw.get_ifd(0x8825)  # GPSInfo IFD pointer
+    if gps_ifd:
+        result["GPSInfo"] = {GPSTAGS.get(k, str(k)): v for k, v in gps_ifd.items()}
+
+    return result
 
 
 def equal_images(frame1: npt.NDArray[Any], frame2: npt.NDArray[Any]) -> bool:
