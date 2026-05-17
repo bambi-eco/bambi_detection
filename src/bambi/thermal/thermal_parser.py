@@ -35,7 +35,7 @@ from typing import Dict, Optional, Tuple, Any
 import numpy as np
 from PIL import Image
 
-__all__ = ['Thermal', 'parse_dji_rjpeg', 'apply_colormap']
+__all__ = ['Thermal', 'parse_dji_rjpeg', 'apply_colormap', 'read_dji_flight_params']
 
 # ---------------------------------------------------------------------------
 # DJI SDK ctypes structs
@@ -390,6 +390,107 @@ def _read_dji_xmp_params(filepath: str) -> dict:
             for k in missing:
                 if k in iirp:
                     result[k] = iirp[k]
+
+        return result
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# GPS / orientation / datetime reader (no SDK required)
+# ---------------------------------------------------------------------------
+
+def read_dji_flight_params(filepath: str) -> dict:
+    """Read GPS, orientation and datetime from a DJI JPEG XMP segment.
+
+    Works on both thermal and RGB DJI JPEGs — the XMP payload is present in
+    both.  Returns a plain dict; keys are omitted when the value cannot be
+    read.
+
+    Returned keys (all optional):
+      ``latitude``, ``longitude`` — decimal degrees (WGS-84)
+      ``altitude_absolute`` — metres above sea level (AbsoluteAltitude)
+      ``altitude_relative`` — metres above take-off point (RelativeAltitude)
+      ``gimbal_pitch``, ``gimbal_yaw``, ``gimbal_roll`` — degrees,
+          **EXIF convention** (nadir = −90° pitch, yaw in −180…+180)
+      ``flight_pitch``, ``flight_yaw``, ``flight_roll`` — drone attitude
+      ``flight_x_speed``, ``flight_y_speed``, ``flight_z_speed``
+      ``datetime_utc`` — timezone-aware :class:`datetime.datetime` in UTC,
+          sourced from ``CreateDate`` (same clock as the filename) so it can
+          be matched against timestamps extracted from filenames.
+    """
+    import xml.etree.ElementTree as ET
+    import datetime as _dt
+
+    try:
+        xmp_bytes = _extract_jpeg_xmp(filepath)
+        if not xmp_bytes:
+            return {}
+
+        xmp_str = xmp_bytes.decode('utf-8', errors='replace').rstrip('\x00')
+        root = ET.fromstring(xmp_str)
+
+        flat: Dict[str, str] = {}
+        for elem in root.iter():
+            local_tag = elem.tag.split('}', 1)[-1] if '}' in elem.tag else elem.tag
+            if elem.text and elem.text.strip():
+                flat[local_tag] = elem.text.strip()
+            for k, v in elem.attrib.items():
+                local_k = k.split('}', 1)[-1] if '}' in k else k
+                flat[local_k] = v
+
+        def _float(key: str) -> Optional[float]:
+            val = flat.get(key)
+            if val is None:
+                return None
+            nums = re.findall(r'[-+]?\d+\.?\d*', val)
+            try:
+                return float(nums[0]) if nums else None
+            except ValueError:
+                return None
+
+        result: Dict[str, Any] = {}
+
+        for dst, src in [
+            ('latitude',          'GpsLatitude'),
+            ('longitude',         'GpsLongitude'),
+            ('altitude_absolute', 'AbsoluteAltitude'),
+            ('altitude_relative', 'RelativeAltitude'),
+            ('gimbal_pitch',      'GimbalPitchDegree'),
+            ('gimbal_yaw',        'GimbalYawDegree'),
+            ('gimbal_roll',       'GimbalRollDegree'),
+            ('flight_pitch',      'FlightPitchDegree'),
+            ('flight_yaw',        'FlightYawDegree'),
+            ('flight_roll',       'FlightRollDegree'),
+            ('flight_x_speed',    'FlightXSpeed'),
+            ('flight_y_speed',    'FlightYSpeed'),
+            ('flight_z_speed',    'FlightZSpeed'),
+        ]:
+            v = _float(src)
+            if v is not None:
+                result[dst] = v
+
+        # Prefer CreateDate (same clock as the filename) for timestamp matching.
+        # Fall back to UTCAtExposure (GPS-accurate, but typically offset from
+        # the filename-derived time by several seconds).
+        datetime_utc: Optional[_dt.datetime] = None
+        for date_key, assume_utc in (('CreateDate', False), ('UTCAtExposure', True)):
+            date_str = flat.get(date_key)
+            if not date_str:
+                continue
+            try:
+                from dateutil import parser as _dp, tz as _tz
+                parsed = _dp.isoparse(date_str)
+                if assume_utc:
+                    datetime_utc = parsed.replace(tzinfo=_tz.tzutc())
+                else:
+                    datetime_utc = parsed.astimezone(_tz.tzutc())
+                break
+            except Exception:
+                pass
+
+        if datetime_utc is not None:
+            result['datetime_utc'] = datetime_utc
 
         return result
     except Exception:
