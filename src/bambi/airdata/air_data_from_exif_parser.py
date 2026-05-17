@@ -11,7 +11,7 @@ Unit / convention conversions applied here
 * Altitude   : EXIF metres → stored as metres in AirDataFrame.
   AirDataWriter converts to feet when writing the CSV; AirDataParser
   converts back to metres on read — the round-trip is transparent.
-* Gimbal pitch: EXIF −90° = nadir  →  AirData 0° = nadir  (add 90°).
+* Gimbal pitch: no conversion — both EXIF and AirData use −90° = nadir.
 * Gimbal roll : no conversion (0° = level in both conventions).
 * Yaw angles  : EXIF −180…+180  →  AirData 0…360  (Python ``% 360``).
 """
@@ -44,10 +44,10 @@ def _airdata_frame_from_exif(params: dict, frame_id: int, time_ms: int) -> AirDa
     frame.height_above_takeoff = alt_rel
     frame.ascent = alt_rel
 
-    # Gimbal: EXIF −90° = nadir → AirData 0° = nadir
-    gp = params.get('gimbal_pitch')
-    frame.gimbal_pitch = (gp + 90.0) if gp is not None else None
-    frame.gimbal_roll = params.get('gimbal_roll')
+    frame.gimbal_pitch = params.get('gimbal_pitch')
+    gr = params.get('gimbal_roll')
+    # At nadir, gimbal lock causes DJI to report ±180° roll instead of 0°
+    frame.gimbal_roll = 0.0 if (gr is not None and abs(abs(gr) - 180.0) < 5.0) else gr
     gy = params.get('gimbal_yaw')
     frame.gimbal_heading = (gy % 360.0) if gy is not None else None
 
