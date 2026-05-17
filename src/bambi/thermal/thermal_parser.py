@@ -4,37 +4,34 @@ Thermal image parser for DJI and FLIR radiometric JPEGs.
 
 Based on SanNianYiSi/thermal_parser (MIT licence).
 
-The DJI SDK DLL directory (https://www.dji.com/at/downloads/softwares/dji-thermal-sdk) and
-the exiftool executable path are supplied explicitly via constructor parameters.
-The caller is responsible for locating the SDK on the
-current system and passing the paths in.
+The DJI SDK DLL directory (https://www.dji.com/at/downloads/softwares/dji-thermal-sdk)
+is supplied explicitly via the constructor.  The caller is responsible for locating
+the SDK on the current system and passing the path in.
+
+Metadata (camera model, FLIR calibration params, DJI measurement params) is read
+via Pillow and pure-Python binary/XMP parsing — no exiftool required.
 
 Typical usage::
 
     thermal = Thermal(
         sdk_dir="/path/to/dji_sdk/utility/bin/windows/release_x64",
-        exiftool_path="/path/to/exiftool.exe",
     )
     temp_array = thermal.parse("/path/to/DJI_20260301_T.JPG")
     thermal.close()
 
-Both parameters are optional.  When *sdk_dir* is omitted the DJI SDK is not
-loaded and only the pure-Python R-JPEG fallback is available.  When
-*exiftool_path* is omitted camera-model detection is disabled (the parser
-falls back to a speculative decoding strategy). FLIR cameras always require
-exiftool.
+*sdk_dir* is optional.  When omitted the DJI SDK is not loaded and only the
+pure-Python R-JPEG fallback is available.
 """
 
 import os
 import re
 import platform
-import subprocess
 from ctypes import (
     CDLL, POINTER, Structure, cast, create_string_buffer, pointer, sizeof,
     c_float, c_int, c_int16, c_int32, c_uint8, c_uint32, c_void_p,
 )
 from io import BufferedIOBase, BytesIO
-from typing import BinaryIO, Dict, List, Optional, Tuple, Union
+from typing import BinaryIO, Dict, List, Optional, Tuple, Union, Any
 
 import numpy as np
 from PIL import Image
@@ -191,8 +188,51 @@ def _parse_raw_data(stream: BinaryIO, metadata: tuple):
         raise ValueError(
             f'FLIR shape mismatch: metadata {(height, width)} vs data {arr.shape}'
         )
-    fix = np.vectorize(lambda x: (x >> 8) + ((x & 0x00FF) << 8))
-    return width, height, fix(arr)
+    if img.format == 'PNG':
+        # PNG encodes uint16 big-endian; swap to little-endian sensor values
+        arr = ((arr >> 8) | ((arr & 0x00FF) << 8)).astype(arr.dtype)
+    return width, height, arr
+
+
+def _read_flir_camera_params(stream: BinaryIO, records: dict) -> dict:
+    """Read FLIR calibration parameters from FLIR APP1 record type 32.
+
+    Offsets follow the FLIR FFF CameraParams binary layout (all float32 LE).
+    Temperature fields are stored in Kelvin and converted to °C here.
+    Humidity may be stored as a fraction (0-1) or percentage (>2); normalised
+    to the 0-100 scale expected by :meth:`Thermal.parse_flir`.
+    """
+    rec = records.get(32)
+    if rec is None:
+        return {}
+    _, _, offset, length = rec
+    if length < 136:
+        return {}
+    stream.seek(offset)
+    data = np.frombuffer(stream.read(length), dtype='<f4')
+    if len(data) < 34:
+        return {}
+
+    hum_raw = float(data[7])  # offset 28
+    return {
+        'emissivity':                       float(data[0]),
+        'object_distance':                  float(data[1]),
+        'reflected_apparent_temperature':   float(data[2]) - 273.15,
+        'atmospheric_temperature':          float(data[3]) - 273.15,
+        'ir_window_temperature':            float(data[4]) - 273.15,
+        'ir_window_transmission':           float(data[5]),
+        'relative_humidity':                hum_raw if hum_raw > 2 else hum_raw * 100,
+        'planck_r1':  float(data[24]),  # offset 96
+        'planck_b':   float(data[25]),
+        'planck_f':   float(data[26]),
+        'planck_o':   float(data[27]),
+        'planck_r2':  float(data[28]),
+        'atx':        float(data[29]),
+        'ata1':       float(data[30]),
+        'ata2':       float(data[31]),
+        'atb1':       float(data[32]),
+        'atb2':       float(data[33]),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +409,170 @@ def apply_colormap(
 
 
 # ---------------------------------------------------------------------------
+# DJI XMP metadata reader (pure Python, no exiftool)
+# ---------------------------------------------------------------------------
+
+_XMP_MARKER = b'http://ns.adobe.com/xap/1.0/\x00'
+
+
+def _extract_jpeg_xmp(filepath: str) -> Optional[bytes]:
+    """Scan all JPEG APP1 segments and return the XMP payload bytes, or None.
+
+    Pillow only exposes the *first* APP1 segment via img.info; DJI writes EXIF
+    as the first APP1 and XMP as the second, so img.info['xmp'] is always empty
+    for DJI files.  This function scans the raw bytes directly.
+    """
+    with open(filepath, 'rb') as f:
+        data = f.read()
+    if data[:2] != b'\xff\xd8':
+        return None
+    i = 2
+    while i < len(data) - 4:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker == 0xDA:  # SOS — entropy-coded data begins; stop
+            break
+        if marker in (0xD8, 0xD9):
+            i += 2
+            continue
+        seg_len = int.from_bytes(data[i + 2:i + 4], 'big')
+        if marker == 0xE1:  # APP1
+            payload = data[i + 4: i + 2 + seg_len]
+            if payload.startswith(_XMP_MARKER):
+                return payload[len(_XMP_MARKER):]
+        i += 2 + seg_len
+    return None
+
+
+_IIRP_SIG = b'iirp'
+_IIRP_PARAMS_OFFSET = 32  # byte offset inside the APP4 payload where floats begin
+
+# Confirmed offsets (float32 LE) for DJI M3T and compatible cameras:
+#   +0  reflected apparent temperature (°C)
+#   +4  object distance (m)
+#   +8  emissivity (0–1)
+#   +12 relative humidity (fraction 0–1; multiply by 100 to get %)
+_IIRP_N_FLOATS = 4
+
+
+def _read_dji_iirp_params(filepath: str) -> dict:
+    """Read DJI thermal measurement parameters from the APP4 ``iirp`` binary block.
+
+    DJI embeds an ``iirp`` (infrared image reference parameters) block in a
+    JPEG APP4 segment.  Parameters are stored as four consecutive float32
+    little-endian values starting at payload byte 32.
+
+    Emissivity is already in the 0–1 range (unlike XMP, which stores it as a
+    percentage).  Humidity is stored as a fraction (0–1) and is converted here
+    to the percentage expected by :meth:`Thermal.parse_dirp2`.
+    """
+    try:
+        with open(filepath, 'rb') as f:
+            data = f.read()
+        i = 2
+        while i < len(data) - 4:
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker == 0xDA:
+                break
+            if marker in (0xD8, 0xD9):
+                i += 2
+                continue
+            seg_len = int.from_bytes(data[i + 2:i + 4], 'big')
+            if marker == 0xE4:  # APP4
+                payload = data[i + 4: i + 2 + seg_len]
+                end = _IIRP_PARAMS_OFFSET + _IIRP_N_FLOATS * 4
+                if len(payload) >= end and payload[4:8] == _IIRP_SIG:
+                    floats = np.frombuffer(payload[_IIRP_PARAMS_OFFSET:end], dtype='<f4')
+                    hum_raw = float(floats[3])
+                    return {
+                        'reflected_apparent_temperature': float(floats[0]),
+                        'object_distance':                float(floats[1]),
+                        'emissivity':                     float(floats[2]),
+                        'relative_humidity': hum_raw * 100.0 if hum_raw <= 2.0 else hum_raw,
+                    }
+            i += 2 + seg_len
+    except Exception:
+        pass
+    return {}
+
+
+def _read_dji_xmp_params(filepath: str) -> dict:
+    """Extract DJI thermal measurement parameters for *filepath*.
+
+    Priority order:
+    1. XMP ``drone-dji:SelfData`` / standard XMP tags (older DJI cameras).
+    2. APP4 ``iirp`` binary block (M3T and other modern DJI thermal cameras).
+
+    Emissivity from XMP is stored as a percentage (0–100) and is divided by
+    100 here.  Emissivity from ``iirp`` is already in the 0–1 range.
+    """
+    import xml.etree.ElementTree as ET
+
+    _measurement_keys = {
+        'object_distance', 'relative_humidity',
+        'emissivity', 'reflected_apparent_temperature',
+    }
+
+    try:
+        with Image.open(filepath) as img:
+            width, height = img.size
+
+        result: Dict[str, Any] = {'image_width': width, 'image_height': height}
+
+        xmp_bytes = _extract_jpeg_xmp(filepath)
+        if xmp_bytes:
+            xmp_str = xmp_bytes.decode('utf-8', errors='replace').rstrip('\x00')
+            root = ET.fromstring(xmp_str)
+
+            flat: Dict[str, str] = {}
+            for elem in root.iter():
+                local_tag = elem.tag.split('}', 1)[-1] if '}' in elem.tag else elem.tag
+                if elem.text and elem.text.strip():
+                    flat[local_tag] = elem.text.strip()
+                for k, v in elem.attrib.items():
+                    local_k = k.split('}', 1)[-1] if '}' in k else k
+                    flat[local_k] = v
+
+            _tag_candidates = {
+                'object_distance':                ['CalibrateDistance', 'ObjectDistance'],
+                'relative_humidity':              ['Humidity', 'RelativeHumidity'],
+                'emissivity':                     ['Emissivity'],
+                'reflected_apparent_temperature': ['ReflectTemperature', 'ReflectedTemperature',
+                                                   'ReflectedApparentTemperature'],
+            }
+            for param, candidates in _tag_candidates.items():
+                for tag in candidates:
+                    if tag in flat:
+                        nums = re.findall(r'[-\d]+\.?\d*', flat[tag])
+                        if nums:
+                            try:
+                                result[param] = float(nums[0])
+                                break
+                            except ValueError:
+                                pass
+
+            if 'emissivity' in result:
+                result['emissivity'] /= 100.0  # XMP stores as percentage
+
+        # Fill any missing measurement params from the APP4 iirp block
+        missing = _measurement_keys - set(result)
+        if missing:
+            iirp = _read_dji_iirp_params(filepath)
+            for k in missing:
+                if k in iirp:
+                    result[k] = iirp[k]
+
+        return result
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Main Thermal class
 # ---------------------------------------------------------------------------
 
@@ -380,9 +584,8 @@ class Thermal:
     :param sdk_dir: Directory containing the DJI Thermal SDK shared libraries
         (``libdirp.dll`` / ``libdirp.so`` and siblings).  When ``None`` the
         SDK is not loaded; DJI cameras that require it will raise an error.
-    :param exiftool_path: Absolute path to the ``exiftool`` executable.  When
-        ``None`` camera-model detection is disabled and FLIR cameras cannot be
-        parsed.
+    :param exiftool_path: Accepted for backwards compatibility but no longer used.
+        All metadata is now read via Pillow and pure-Python binary parsing.
     """
 
     DJI_XT2 = 'XT2'
@@ -526,8 +729,9 @@ class Thermal:
     def parse(self, filepath_image: str) -> np.ndarray:
         """Parse a radiometric JPEG and return a 2-D temperature array (°C).
 
-        Detects camera model via exiftool when available, otherwise falls back
-        to speculative SDK decoding or the pure-Python R-JPEG extractor.
+        Detects camera model from EXIF, then routes to the appropriate decoder.
+        Falls back to speculative SDK decoding or the pure-Python R-JPEG extractor
+        when the model is unrecognised.
         """
         if not isinstance(filepath_image, str) or not os.path.exists(filepath_image):
             raise FileNotFoundError(f'File not found: {filepath_image}')
@@ -577,86 +781,30 @@ class Thermal:
     # Metadata helpers
     # ------------------------------------------------------------------
 
-    def _run_exiftool(self, filepath: str) -> Optional[Dict[str, str]]:
-        if not self._filepath_exiftool or not os.path.isfile(self._filepath_exiftool):
-            return None
+    def _get_camera_model(self, filepath: str) -> Optional[str]:
         try:
-            result = subprocess.run(
-                [self._filepath_exiftool, filepath],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
-            )
-            text = result.stdout.decode('utf-8', errors='replace').replace('\r', '')
-            return {
-                field.split(':', 1)[0].strip(): field.split(':', 1)[1].strip()
-                for field in text.split('\n')
-                if ':' in field
-            }
+            from bambi.util.image_utils import get_exif_data
+            return get_exif_data(filepath).get('Model') or None
         except Exception:
             return None
 
-    def _get_camera_model(self, filepath: str) -> Optional[str]:
-        meta = self._run_exiftool(filepath)
-        if meta is None:
-            return None
-        return meta.get('Camera Model Name')
-
     def _extract_flir_params(self, filepath: str) -> dict:
-        meta = self._run_exiftool(filepath) or {}
-        kwargs = {}
-        for name, key in [
-            ('emissivity', 'Emissivity'),
-            ('ir_window_transmission', 'IR Window Transmission'),
-            ('planck_r1', 'Planck R1'),
-            ('planck_b', 'Planck B'),
-            ('planck_f', 'Planck F'),
-            ('planck_o', 'Planck O'),
-            ('planck_r2', 'Planck R2'),
-            ('ata1', 'Atmospheric Trans Alpha 1'),
-            ('ata2', 'Atmospheric Trans Alpha 2'),
-            ('atb1', 'Atmospheric Trans Beta 1'),
-            ('atb2', 'Atmospheric Trans Beta 2'),
-            ('atx', 'Atmospheric Trans X'),
-        ]:
-            if key in meta:
-                try:
-                    kwargs[name] = float(meta[key])
-                except ValueError:
-                    pass
-        for name, key in [
-            ('object_distance', 'Object Distance'),
-            ('atmospheric_temperature', 'Atmospheric Temperature'),
-            ('reflected_apparent_temperature', 'Reflected Apparent Temperature'),
-            ('ir_window_temperature', 'IR Window Temperature'),
-            ('relative_humidity', 'Relative Humidity'),
-        ]:
-            if key in meta:
-                try:
-                    kwargs[name] = float(meta[key][:-2])
-                except (ValueError, IndexError):
-                    pass
-        return kwargs
+        try:
+            with open(filepath, 'rb') as f:
+                flir_app1 = _extract_flir_app1(f)
+            records = _parse_flir_app1(flir_app1)
+            params = _read_flir_camera_params(flir_app1, records)
+            if params:
+                return params
+        except Exception:
+            pass
+        return {}
 
     def _extract_dji_params(self, filepath: str, camera_model: str) -> dict:
-        meta = self._run_exiftool(filepath) or {}
-        kwargs = {}
-        for name, key in [
-            ('object_distance', 'Object Distance'),
-            ('relative_humidity', 'Relative Humidity'),
-            ('emissivity', 'Emissivity'),
-            ('reflected_apparent_temperature', 'Reflected Temperature'),
-        ]:
-            if key in meta:
-                nums = re.findall(r'\d+\.\d+|\d+', meta[key])
-                if nums:
-                    kwargs[name] = float(nums[0])
-        if camera_model != self.DJI_M30T:
-            try:
-                kwargs['image_height'] = int(meta.get('Image Height', 512))
-                kwargs['image_width'] = int(meta.get('Image Width', 640))
-            except (ValueError, TypeError):
-                pass
-        if 'emissivity' in kwargs:
-            kwargs['emissivity'] /= 100
+        kwargs = _read_dji_xmp_params(filepath)
+        if camera_model == self.DJI_M30T:
+            kwargs.pop('image_width', None)
+            kwargs.pop('image_height', None)
         if camera_model in {
             self.DJI_M2EA, self.DJI_H20N, self.DJI_M3T, self.DJI_M3TD,
             self.DJI_M30T, self.DJI_H30T, self.DJI_M4T,
@@ -689,21 +837,7 @@ class Thermal:
         atb2: float = -0.00667,
         atx: float = 1.9,
     ) -> np.ndarray:
-        if not self._filepath_exiftool or not os.path.isfile(self._filepath_exiftool):
-            raise RuntimeError(
-                "parse_flir requires exiftool.  Pass exiftool_path to Thermal()."
-            )
-        thermal_bytes = subprocess.check_output([
-            self._filepath_exiftool, '-RawThermalImage', '-b', filepath_image
-        ])
-        stream = BytesIO(thermal_bytes)
-        img = Image.open(stream)
-        if img.format == 'TIFF':
-            raw = np.array(img)
-        elif img.format == 'PNG':
-            raw = _unpack_flir(filepath_image)
-        else:
-            raise ValueError(f'Unexpected raw thermal image format: {img.format}')
+        raw = _unpack_flir(filepath_image)
 
         emiss_wind = 1 - ir_window_transmission
         refl_wind = 0.0
