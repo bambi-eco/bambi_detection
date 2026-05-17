@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Thermal image parser for DJI and FLIR radiometric JPEGs.
+Thermal image parser for DJI radiometric JPEGs.
 
 Based on SanNianYiSi/thermal_parser (MIT licence).
 
@@ -8,7 +8,7 @@ The DJI SDK DLL directory (https://www.dji.com/at/downloads/softwares/dji-therma
 is supplied explicitly via the constructor.  The caller is responsible for locating
 the SDK on the current system and passing the path in.
 
-Metadata (camera model, FLIR calibration params, DJI measurement params) is read
+Metadata (camera model, DJI measurement params) is read
 via Pillow and pure-Python binary/XMP parsing — no exiftool required.
 
 Typical usage::
@@ -30,8 +30,7 @@ from ctypes import (
     CDLL, POINTER, Structure, cast, create_string_buffer, pointer, sizeof,
     c_float, c_int, c_int16, c_int32, c_uint8, c_uint32, c_void_p,
 )
-from io import BufferedIOBase, BytesIO
-from typing import BinaryIO, Dict, List, Optional, Tuple, Union, Any
+from typing import Dict, Optional, Tuple, Any
 
 import numpy as np
 from PIL import Image
@@ -61,178 +60,6 @@ class dirp_measurement_params_t(Structure):
         ('emissivity', c_float),
         ('reflection', c_float),
     ]
-
-
-# ---------------------------------------------------------------------------
-# FLIR APP1 parsing (pure Python)
-# ---------------------------------------------------------------------------
-
-SEGMENT_SEP = b'\xff'
-APP1_MARKER = b'\xe1'
-MAGIC_FLIR_DEF = b'FLIR\x00'
-CHUNK_APP1_BYTES_COUNT = len(APP1_MARKER)
-CHUNK_LENGTH_BYTES_COUNT = 2
-CHUNK_MAGIC_BYTES_COUNT = len(MAGIC_FLIR_DEF)
-CHUNK_SKIP_BYTES_COUNT = 1
-CHUNK_NUM_BYTES_COUNT = 1
-CHUNK_TOT_BYTES_COUNT = 1
-CHUNK_METADATA_LENGTH = (
-    CHUNK_APP1_BYTES_COUNT + CHUNK_LENGTH_BYTES_COUNT + CHUNK_MAGIC_BYTES_COUNT
-    + CHUNK_SKIP_BYTES_COUNT + CHUNK_NUM_BYTES_COUNT + CHUNK_TOT_BYTES_COUNT
-)
-
-
-def _unpack_flir(path_or_stream: Union[str, BinaryIO]) -> np.ndarray:
-    if isinstance(path_or_stream, str) and os.path.isfile(path_or_stream):
-        with open(path_or_stream, 'rb') as f:
-            return _unpack_flir(f)
-    stream = path_or_stream
-    flir_app1 = _extract_flir_app1(stream)
-    records = _parse_flir_app1(flir_app1)
-    return _parse_thermal(flir_app1, records)
-
-
-def _extract_flir_app1(stream: BinaryIO) -> BinaryIO:
-    stream.read(2)
-    chunks_count: Optional[int] = None
-    chunks: Dict[int, bytes] = {}
-    while True:
-        b = stream.read(1)
-        if b == b'':
-            break
-        if b != SEGMENT_SEP:
-            continue
-        parsed = _parse_flir_chunk(stream, chunks_count)
-        if not parsed:
-            continue
-        chunks_count, chunk_num, chunk = parsed
-        if chunks.get(chunk_num) is not None:
-            raise ValueError('Invalid FLIR: duplicate chunk number')
-        chunks[chunk_num] = chunk
-        if chunk_num == chunks_count:
-            break
-    if chunks_count is None:
-        raise ValueError('Invalid FLIR: no metadata encountered')
-    data = b''.join(chunks[i] for i in range(chunks_count + 1))
-    s = BytesIO(data)
-    s.seek(0)
-    return s
-
-
-def _parse_flir_chunk(
-    stream: BinaryIO, chunks_count: Optional[int]
-) -> Optional[Tuple[int, int, bytes]]:
-    marker = stream.read(CHUNK_APP1_BYTES_COUNT)
-    length_bytes = stream.read(CHUNK_LENGTH_BYTES_COUNT)
-    length = int.from_bytes(length_bytes, 'big') - CHUNK_METADATA_LENGTH
-    magic = stream.read(CHUNK_MAGIC_BYTES_COUNT)
-    if not (marker == APP1_MARKER and magic == MAGIC_FLIR_DEF):
-        stream.seek(-len(marker) - len(length_bytes) - len(magic), 1)
-        return None
-    stream.seek(1, 1)
-    chunk_num = int.from_bytes(stream.read(CHUNK_NUM_BYTES_COUNT), 'big')
-    chunks_tot = int.from_bytes(stream.read(CHUNK_TOT_BYTES_COUNT), 'big')
-    if chunks_count is None:
-        chunks_count = chunks_tot
-    if chunk_num < 0 or chunk_num > chunks_tot or chunks_tot != chunks_count:
-        raise ValueError(f'Invalid FLIR: inconsistent chunk count ({chunks_tot})')
-    return chunks_tot, chunk_num, stream.read(length + 1)
-
-
-def _parse_thermal(stream: BinaryIO, records: dict) -> np.ndarray:
-    _, _, raw = _parse_raw_data(stream, records[1])
-    return raw
-
-
-def _parse_flir_app1(stream: BinaryIO) -> dict:
-    stream.read(4)
-    stream.seek(16, 1)
-    stream.read(4)
-    record_dir_offset = int.from_bytes(stream.read(4), 'big')
-    record_dir_count = int.from_bytes(stream.read(4), 'big')
-    stream.seek(28, 1)
-    stream.read(4)
-    stream.seek(record_dir_offset)
-    stream.read(32 * record_dir_count)
-    details: dict = {}
-    for nr in range(record_dir_count):
-        d = _parse_flir_record_metadata(stream, nr)
-        if d:
-            details[d[1]] = d
-    return details
-
-
-def _parse_flir_record_metadata(stream: BinaryIO, record_nr: int):
-    stream.seek(32 * record_nr)
-    rtype = int.from_bytes(stream.read(2), 'big')
-    if rtype < 1:
-        return None
-    stream.read(2); stream.read(4); stream.read(4)
-    offset = int.from_bytes(stream.read(4), 'big')
-    length = int.from_bytes(stream.read(4), 'big')
-    stream.read(4); stream.read(4); stream.read(4)
-    return 32 * record_nr, rtype, offset, length
-
-
-def _parse_raw_data(stream: BinaryIO, metadata: tuple):
-    _, _, offset, length = metadata
-    stream.seek(offset)
-    stream.seek(2, 1)
-    width = int.from_bytes(stream.read(2), 'little')
-    height = int.from_bytes(stream.read(2), 'little')
-    stream.seek(offset + 32)
-    raw_bytes = stream.read(length)
-    img = Image.open(BytesIO(raw_bytes))
-    arr = np.array(img)
-    if arr.shape != (height, width):
-        raise ValueError(
-            f'FLIR shape mismatch: metadata {(height, width)} vs data {arr.shape}'
-        )
-    if img.format == 'PNG':
-        # PNG encodes uint16 big-endian; swap to little-endian sensor values
-        arr = ((arr >> 8) | ((arr & 0x00FF) << 8)).astype(arr.dtype)
-    return width, height, arr
-
-
-def _read_flir_camera_params(stream: BinaryIO, records: dict) -> dict:
-    """Read FLIR calibration parameters from FLIR APP1 record type 32.
-
-    Offsets follow the FLIR FFF CameraParams binary layout (all float32 LE).
-    Temperature fields are stored in Kelvin and converted to °C here.
-    Humidity may be stored as a fraction (0-1) or percentage (>2); normalised
-    to the 0-100 scale expected by :meth:`Thermal.parse_flir`.
-    """
-    rec = records.get(32)
-    if rec is None:
-        return {}
-    _, _, offset, length = rec
-    if length < 136:
-        return {}
-    stream.seek(offset)
-    data = np.frombuffer(stream.read(length), dtype='<f4')
-    if len(data) < 34:
-        return {}
-
-    hum_raw = float(data[7])  # offset 28
-    return {
-        'emissivity':                       float(data[0]),
-        'object_distance':                  float(data[1]),
-        'reflected_apparent_temperature':   float(data[2]) - 273.15,
-        'atmospheric_temperature':          float(data[3]) - 273.15,
-        'ir_window_temperature':            float(data[4]) - 273.15,
-        'ir_window_transmission':           float(data[5]),
-        'relative_humidity':                hum_raw if hum_raw > 2 else hum_raw * 100,
-        'planck_r1':  float(data[24]),  # offset 96
-        'planck_b':   float(data[25]),
-        'planck_f':   float(data[26]),
-        'planck_o':   float(data[27]),
-        'planck_r2':  float(data[28]),
-        'atx':        float(data[29]),
-        'ata1':       float(data[30]),
-        'ata2':       float(data[31]),
-        'atb1':       float(data[32]),
-        'atb2':       float(data[33]),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +96,6 @@ def parse_dji_rjpeg(filepath: str, dtype=np.float32) -> np.ndarray:
         T [°C] = raw_uint16 / 64.0 − 273.15
 
     Supported cameras: M30T, H20T/ZH20T, M3T, M3TD, M4T, H30T, M2EA, H20N.
-    For FLIR-based cameras use :meth:`Thermal.parse_flir` instead.
     For H20T / M3T which use a proprietary compressed format this fallback
     will fail — the DJI Thermal SDK is required.
     """
@@ -341,8 +167,6 @@ def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:
 # ---------------------------------------------------------------------------
 # Colormap helpers
 # ---------------------------------------------------------------------------
-
-ABSOLUTE_ZERO = 273.15
 
 _CMAP_ALIASES = {
     'white-hotspot': 'gray',
@@ -577,7 +401,7 @@ def _read_dji_xmp_params(filepath: str) -> dict:
 # ---------------------------------------------------------------------------
 
 class Thermal:
-    """Parse DJI and FLIR radiometric JPEG files into temperature arrays.
+    """Parse DJI radiometric JPEG files into temperature arrays.
 
     :param dtype: Output dtype — ``np.float32`` (temperatures in °C, default)
         or ``np.int16`` (temperatures × 10 in tenths of °C).
@@ -588,16 +412,8 @@ class Thermal:
         All metadata is now read via Pillow and pure-Python binary parsing.
     """
 
-    DJI_XT2 = 'XT2'
     DJI_ZH20T = 'ZH20T'
     DJI_XTS = 'XT S'
-    DJI_XTR = 'FLIR'
-    FLIR_B60 = 'Flir b60'
-    FLIR_E40 = 'FLIR E40'
-    FLIR_T640 = 'FLIR T640'
-    FLIR = 'FLIR'
-    FLIR_DEFAULT = '*'
-    FLIR_AX8 = 'FLIR AX8'
     DJI_M2EA = 'MAVIC2-ENTERPRISE-ADVANCED'
     DJI_H20N = 'ZH20N'
     DJI_M3T = 'M3T'
@@ -727,7 +543,7 @@ class Thermal:
     # ------------------------------------------------------------------
 
     def parse(self, filepath_image: str) -> np.ndarray:
-        """Parse a radiometric JPEG and return a 2-D temperature array (°C).
+        """Parse a DJI radiometric JPEG and return a 2-D temperature array (°C).
 
         Detects camera model from EXIF, then routes to the appropriate decoder.
         Falls back to speculative SDK decoding or the pure-Python R-JPEG extractor
@@ -738,21 +554,12 @@ class Thermal:
 
         camera_model = self._get_camera_model(filepath_image)
 
-        _flir_models = {
-            self.FLIR, self.FLIR_DEFAULT, self.FLIR_T640,
-            self.FLIR_E40, self.FLIR_B60, self.FLIR_AX8,
-            self.DJI_XT2, self.DJI_XTR,
-        }
         _dji_sdk_models = {
             self.DJI_ZH20T, self.DJI_XTS,
             self.DJI_M2EA, self.DJI_H20N,
             self.DJI_M3T, self.DJI_M3TD, self.DJI_M30T,
             self.DJI_H30T, self.DJI_M4T,
         }
-
-        if camera_model and (camera_model in _flir_models or self.FLIR in camera_model):
-            kwargs = self._extract_flir_params(filepath_image)
-            return self.parse_flir(filepath_image, **kwargs)
 
         if camera_model and camera_model in _dji_sdk_models:
             if self._sdk_loaded:
@@ -788,18 +595,6 @@ class Thermal:
         except Exception:
             return None
 
-    def _extract_flir_params(self, filepath: str) -> dict:
-        try:
-            with open(filepath, 'rb') as f:
-                flir_app1 = _extract_flir_app1(f)
-            records = _parse_flir_app1(flir_app1)
-            params = _read_flir_camera_params(flir_app1, records)
-            if params:
-                return params
-        except Exception:
-            pass
-        return {}
-
     def _extract_dji_params(self, filepath: str, camera_model: str) -> dict:
         kwargs = _read_dji_xmp_params(filepath)
         if camera_model == self.DJI_M30T:
@@ -811,67 +606,6 @@ class Thermal:
         }:
             kwargs['m2ea_mode'] = True
         return kwargs
-
-    # ------------------------------------------------------------------
-    # FLIR Planck conversion
-    # ------------------------------------------------------------------
-
-    def parse_flir(
-        self,
-        filepath_image: str,
-        emissivity: float = 1.0,
-        object_distance: float = 1.0,
-        atmospheric_temperature: float = 20.0,
-        reflected_apparent_temperature: float = 20.0,
-        ir_window_temperature: float = 20.0,
-        ir_window_transmission: float = 1.0,
-        relative_humidity: float = 50.0,
-        planck_r1: float = 21106.77,
-        planck_b: float = 1501.0,
-        planck_f: float = 1.0,
-        planck_o: float = -7340.0,
-        planck_r2: float = 0.012545258,
-        ata1: float = 0.006569,
-        ata2: float = 0.01262,
-        atb1: float = -0.002276,
-        atb2: float = -0.00667,
-        atx: float = 1.9,
-    ) -> np.ndarray:
-        raw = _unpack_flir(filepath_image)
-
-        emiss_wind = 1 - ir_window_transmission
-        refl_wind = 0.0
-        h2o = (relative_humidity / 100) * np.exp(
-            1.5587 + 0.06939 * atmospheric_temperature
-            - 0.00027816 * atmospheric_temperature ** 2
-            + 0.00000068455 * atmospheric_temperature ** 3
-        )
-        tau1 = atx * np.exp(-np.sqrt(object_distance / 2) * (ata1 + atb1 * np.sqrt(h2o))) + (
-            1 - atx
-        ) * np.exp(-np.sqrt(object_distance / 2) * (ata2 + atb2 * np.sqrt(h2o)))
-        tau2 = tau1
-
-        def _rad(T):
-            return planck_r1 / (planck_r2 * (np.exp(planck_b / (T + ABSOLUTE_ZERO)) - planck_f)) - planck_o
-
-        raw_refl1_attn = (1 - emissivity) / emissivity * _rad(reflected_apparent_temperature)
-        raw_atm1_attn = (1 - tau1) / emissivity / tau1 * _rad(atmospheric_temperature)
-        raw_wind_attn = emiss_wind / emissivity / tau1 / ir_window_transmission * _rad(ir_window_temperature)
-        raw_refl2_attn = refl_wind / emissivity / tau1 / ir_window_transmission * _rad(reflected_apparent_temperature)
-        raw_atm2_attn = (1 - tau2) / emissivity / tau1 / ir_window_transmission / tau2 * _rad(atmospheric_temperature)
-
-        raw_obj = (
-            raw / emissivity / tau1 / ir_window_transmission / tau2
-            - raw_atm1_attn - raw_atm2_attn - raw_wind_attn
-            - raw_refl1_attn - raw_refl2_attn
-        )
-        val = planck_r1 / (planck_r2 * (raw_obj + planck_o)) + planck_f
-        if np.any(val <= 0):
-            raise ValueError(
-                f'Planck formula produced non-positive values — file may be corrupt: {filepath_image}'
-            )
-        temperature = planck_b / np.log(val) - ABSOLUTE_ZERO
-        return temperature.astype(self._dtype)
 
     # ------------------------------------------------------------------
     # DJI SDK path (requires libdirp DLLs)
