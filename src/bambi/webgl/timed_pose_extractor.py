@@ -422,6 +422,7 @@ class TimedPoseExtractor:
         origin: Optional[AirDataFrame] = None,
         overwrite_existing: bool = False,
         remove_duplicates: bool = True,
+        timezone: tzinfo = TIMEZONE_VIENNA,
     ) -> Sequence[tuple[int, int]]:
         """
         Method used to extract normalized video frames together with a JSON file describing the relative position between the first frame and the others
@@ -452,8 +453,8 @@ class TimedPoseExtractor:
         image_timestamps: list[datetime.datetime] = []
 
         # match SRT/video frames with AirData frames
-        srt_frames, num_videos, frame_to_video = self.get_srt_frames(srt_data_paths)
-        start_frame, ad_frames = self.get_air_data_frames(air_data_path, srt_frames[0].timestamp)
+        srt_frames, num_videos, frame_to_video = self.get_srt_frames(srt_data_paths, timezone=timezone)
+        start_frame, ad_frames = self.get_air_data_frames(air_data_path, srt_frames[0].timestamp, timezone=timezone)
         srt_frames, ad_frames, conv_ranges = self.adapt_srt_air_data_frames(srt_frames, ad_frames, start_frame)
 
         # Compute which global frame indices (across all videos) are selected after applying
