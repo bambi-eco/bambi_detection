@@ -22,8 +22,10 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
         calibration_res: Dict[str, Any],
         _new_size: Optional[Tuple[int, int]] = None,
         _new_camera_matrix: Optional[npt.NDArray[Any]] = None,
+        preserve_aspect_ratio: bool = False,
     ):
         self.calibration_res = calibration_res
+        self.preserve_aspect_ratio = preserve_aspect_ratio
         self.undistortion_parameters = UndistortionParameters(
             _new_camera_matrix, _new_size
         )
@@ -115,9 +117,11 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
         """
         w, h = img_size
         if self.undistortion_parameters.new_size is None:
-            wh = min(h, w)
-            self.undistortion_parameters.new_size = (wh, wh)
-            # print("WARNING: No new size defined, using square image!")
+            if self.preserve_aspect_ratio:
+                self.undistortion_parameters.new_size = (w, h)
+            else:
+                wh = min(h, w)
+                self.undistortion_parameters.new_size = (wh, wh)
         mtx = np.asarray(self.calibration_res["mtx"])
         dist = np.asarray(self.calibration_res["dist"])
         if self.undistortion_parameters.new_camera_matrix is None:
@@ -130,10 +134,11 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
                 centerPrincipalPoint=center_principal_point,
             )
             if force_same_fov:
-                assert (
-                    self.undistortion_parameters.new_size[0]
-                    == self.undistortion_parameters.new_size[1]
-                ), "The new image size must be square to force the same fov in x and y!"
+                if not self.preserve_aspect_ratio:
+                    assert (
+                        self.undistortion_parameters.new_size[0]
+                        == self.undistortion_parameters.new_size[1]
+                    ), "The new image size must be square to force the same fov in x and y!"
                 fxy = max(new_cameramtx[0, 0], new_cameramtx[1, 1])
                 new_cameramtx[0, 0] = fxy
                 new_cameramtx[1, 1] = fxy
