@@ -492,6 +492,7 @@ class PhotoPoseExtractor:
         include_gps: bool = True,
         mask_images: bool = False,
         thermal_colorizer: Optional[ThermalColorizer] = None,
+        use_gimbal_heading: bool = False,
     ):
         """
         :param rel_transformer: Transforms WGS-84 (lat, lon) to projected CRS.
@@ -517,6 +518,8 @@ class PhotoPoseExtractor:
             rather than being read as ordinary RGB images with ``cv2.imread``.
             Requires *calibration_res* to also be set (images are only written
             to *output_image_dir* when an undistorter is active).
+        :param use_gimbal_heading: When True, use frame.gimbal_heading instead of
+            frame.compass_heading for the yaw rotation.
         """
         if calibration_res is None and fovy is None:
             raise ValueError(
@@ -534,6 +537,7 @@ class PhotoPoseExtractor:
         self.include_gps = include_gps
         self.mask_images = mask_images
         self._thermal_colorizer = thermal_colorizer
+        self.use_gimbal_heading = use_gimbal_heading
 
         # Build undistorter if calibration is available
         self._undistorter: Optional[PhotoUndistorter] = None
@@ -848,14 +852,13 @@ class PhotoPoseExtractor:
             else 0.0
         )
 
+        heading = frame.gimbal_heading if self.use_gimbal_heading else frame.compass_heading
         rotation = [
             float(frame.gimbal_pitch) + 90
             if frame.gimbal_pitch is not None
             else 0.0,
             0,  # roll is always zero
-            (frame.compass_heading + correction_angle)
-            if frame.compass_heading is not None
-            else 0.0,
+            (heading + correction_angle) if heading is not None else 0.0,
         ]
 
         # When undistorting, the output is always .png

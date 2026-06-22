@@ -89,17 +89,20 @@ class TimedPoseExtractor:
         rel_transformer: Transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633)),
         drone_name: Drone = Drone.M30T,
         camera_name: Camera = Camera.Thermal,
+        use_gimbal_heading: bool = False,
     ):
         """
         :param calibrated_frame_accessor: Object used to access the individual, normalized video frames
         :param rel_transformer: Used to calculate the relative position between from the reference point per frame
         :param drone_name: Drone used to create video
         :param camera_name: Camera used to create video
+        :param use_gimbal_heading: When True, use frame.gimbal_heading instead of frame.compass_heading for the yaw rotation
         """
         self.frame_accessor = calibrated_frame_accessor
         self.rel_transformer = rel_transformer
         self.drone_name = drone_name
         self.camera_name = camera_name
+        self.use_gimbal_heading = use_gimbal_heading
 
 
     @staticmethod
@@ -536,11 +539,12 @@ class TimedPoseExtractor:
                 frame_altitude - origin_altitude,
             ]
 
+            heading = frame.gimbal_heading if self.use_gimbal_heading else frame.compass_heading
             rotation = [
                 # pitch is rotation around X axis (+90° because per default it faces forward)
                 (float(frame.gimbal_pitch) + 90) % 360 if frame.gimbal_pitch is not None else 0.0,
                 0,  # roll (Y-axis) is always zero!
-                frame.compass_heading if frame.compass_heading is not None else 0.0,  # heading is rotation around Z (up axis)
+                heading if heading is not None else 0.0,  # heading is rotation around Z (up axis)
             ]
 
             current_dict = {

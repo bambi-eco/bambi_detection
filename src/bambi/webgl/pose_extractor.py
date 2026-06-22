@@ -35,6 +35,7 @@ class PoseExtractor:
         ),
         drone_name: Optional[Drone] = None,
         camera_name: Optional[Camera] = None,
+        use_gimbal_heading: bool = False,
     ):
         """
         :param calibrated_frame_accessor: Object used to access the individual, normalized video frames
@@ -42,12 +43,14 @@ class PoseExtractor:
         :param rel_transformer: Used to calculate the relative position between from the reference point per frame
         :param drone_name: Drone used to create video
         :param camera_name: Camera used to create video
+        :param use_gimbal_heading: When True, use frame.gimbal_heading instead of frame.compass_heading for the yaw rotation
         """
         self.calibrated_frame_accessor = calibrated_frame_accessor
         self.parser = parser
         self.rel_transformer = rel_transformer
         self.drone_name = drone_name
         self.camera_name = camera_name
+        self.use_gimbal_heading = use_gimbal_heading
 
     def extract(
         self,
@@ -122,6 +125,7 @@ class PoseExtractor:
             reference_frame=origin,
             include_gps=include_gps,
             mask_images=mask_images,
+            use_gimbal_heading=self.use_gimbal_heading,
         )
 
         self.calibrated_frame_accessor.access(
@@ -172,6 +176,7 @@ class PoseExtractorCallback:
     gps_writer: Optional[GpsExifWriter] = None
     include_gps: bool = False
     mask_images: bool = False
+    use_gimbal_heading: bool = False
 
     _reference_transformed: Optional[tuple[float, float]] = None
 
@@ -284,8 +289,7 @@ class PoseExtractorCallback:
                 float(frame.gimbal_pitch) + 90 if frame.gimbal_pitch is not None else 0.0,
                 # pitch is rotation around X axis (+90° because per default it faces forward)
                 0,  # roll (Y-axis) is always zero!
-                (frame.compass_heading + correction_angle)
-                if frame.compass_heading is not None
+                (heading + correction_angle) if (heading := frame.gimbal_heading if self.use_gimbal_heading else frame.compass_heading) is not None
                 else 0.0,  # heading is rotation around Z (up axis)
             ],
             "fovy": self.fovy_callback(),
