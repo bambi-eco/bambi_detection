@@ -67,28 +67,21 @@ def _read_gps_from_srt(path: str) -> List[Tuple[float, float]]:
 
 def _read_gps_from_airdata(path: str) -> List[Tuple[float, float]]:
     """Return (lat, lon) pairs from an AirData CSV (video rows only)."""
-    import csv as _csv
+    try:
+        from bambi.airdata.air_data_parser import AirDataParser
+    except ImportError:
+        print(f"  [warn] bambi package not importable; cannot parse AirData: {path}", file=sys.stderr)
+        return []
 
     coords = []
     try:
-        with open(path, encoding="utf-8-sig") as f:
-            reader = _csv.DictReader(f)
-            stripped = {k.strip(): k for k in (reader.fieldnames or [])}
-            lat_key = next((stripped[k] for k in stripped if "latitude"  in k.lower()), None)
-            lon_key = next((stripped[k] for k in stripped if "longitude" in k.lower()), None)
-            vid_key = next((stripped[k] for k in stripped if k.strip().lower() == "isvideo"), None)
-            if not lat_key or not lon_key:
-                print(f"  [warn] No latitude/longitude columns in: {path}", file=sys.stderr)
-                return []
-            for row in reader:
-                if vid_key and row.get(vid_key, "").strip() != "1":
-                    continue
-                try:
-                    lat, lon = float(row[lat_key]), float(row[lon_key])
-                    if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0 or lon != 0):
-                        coords.append((lat, lon))
-                except (ValueError, TypeError, KeyError):
-                    continue
+        for frame in AirDataParser().parse(path):
+            if not frame.isVideo:
+                continue
+            lat, lon = frame.latitude, frame.longitude
+            if lat is not None and lon is not None:
+                if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0 or lon != 0):
+                    coords.append((lat, lon))
     except Exception as exc:
         print(f"  [warn] Could not read AirData GPS from {path}: {exc}", file=sys.stderr)
     return coords
@@ -263,13 +256,13 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python generate_flat_surface_dem.py flight.SRT
-  python generate_flat_surface_dem.py DJI_0001.SRT DJI_0002.SRT --elevation 2.5
-  python generate_flat_surface_dem.py flight_airdata.csv --epsg 32643 --output /data/dem
+  python generate_flat_surface_dem.py --inputs flight.SRT
+  python generate_flat_surface_dem.py --inputs DJI_0001.SRT DJI_0002.SRT --elevation 2.5
+  python generate_flat_surface_dem.py --inputs flight_airdata.csv --epsg 32643 --output /data/dem
 """,
     )
     parser.add_argument(
-        "inputs", nargs="+", metavar="FILE",
+        "--inputs", nargs="+", metavar="FILE",
         help="One or more SRT (.srt) or AirData (.csv) flight log files",
     )
     parser.add_argument(
