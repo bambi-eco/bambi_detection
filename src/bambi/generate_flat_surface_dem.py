@@ -128,21 +128,8 @@ def generate_flat_surface_mesh(
     -------
     (output_glb, output_json)
     """
-    try:
-        import gltflib as gl
-    except ImportError:
-        print("gltflib not found — installing …", file=sys.stderr)
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "gltflib"])
-        import gltflib as gl
-
-    try:
-        from pyproj import Transformer
-    except ImportError:
-        print("pyproj not found — installing …", file=sys.stderr)
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyproj"])
-        from pyproj import Transformer
+    import gltflib as gl
+    from pyproj import Transformer
 
     import numpy as np
 
