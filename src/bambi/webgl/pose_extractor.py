@@ -67,6 +67,7 @@ class PoseExtractor:
         include_gps: bool = False,
         mask_images: bool = False,
         origin: Optional[AirDataFrame] = None,
+        no_images: bool = False,
     ) -> None:
         """
         Method used to extract normalized video frames together with a JSON file describing the relative position between the first frame and the others
@@ -83,6 +84,7 @@ class PoseExtractor:
         :param include_gps: Flag that signals if GPS position should be included in created JSON file per frame
         :param mask_images: Flag that signals if undistorted images should be masked out
         :param origin: Origin used for pose definition (only longitude, latitude and optionally altitude required). If None first position is used.
+        :param no_images: If True, only the poses.json file is created and no image data is written to disk
         :return:
         """
         # array holding the index and the current frame_time
@@ -126,6 +128,7 @@ class PoseExtractor:
             include_gps=include_gps,
             mask_images=mask_images,
             use_gimbal_heading=self.use_gimbal_heading,
+            no_images=no_images,
         )
 
         self.calibrated_frame_accessor.access(
@@ -177,6 +180,7 @@ class PoseExtractorCallback:
     include_gps: bool = False
     mask_images: bool = False
     use_gimbal_heading: bool = False
+    no_images: bool = False
 
     _reference_transformed: Optional[tuple[float, float]] = None
 
@@ -262,14 +266,15 @@ class PoseExtractorCallback:
 
         filename = f"{idx}-{frame_idx}.png"
         path = os.path.join(self.target_folder, filename)
-        if self.mask_images:
-            # TODO calculate mask from distortion parameters (currently there is a bug)
-            mask = np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
-            mask[np.all(img == (0, 0, 0), axis=-1)] = 0
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2RGBA)
-            img[:, :, 3] = mask
-        cv2.imwrite(path, img)
-        if self.gps_writer is not None:
+        if not self.no_images:
+            if self.mask_images:
+                # TODO calculate mask from distortion parameters (currently there is a bug)
+                mask = np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
+                mask[np.all(img == (0, 0, 0), axis=-1)] = 0
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2RGBA)
+                img[:, :, 3] = mask
+            cv2.imwrite(path, img)
+        if not self.no_images and self.gps_writer is not None:
             drone_name = (
                 "Unknown"
                 if self.drone_name is None

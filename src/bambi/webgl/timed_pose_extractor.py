@@ -53,6 +53,7 @@ class TimedFrameExtractorCallback:
     extension: str = "jpg"
     overwrite_existing: bool = False
     selected_indices: Optional[set] = None  # None means all indices are processed
+    no_images: bool = False
 
     def __call__(self, idx: int, img: npt.NDArray[Any]) -> bool:
 
@@ -69,7 +70,7 @@ class TimedFrameExtractorCallback:
 
         filename = f"{len(self.image_files)}-{idx}-{frame_idx}.{self.extension}"
         path = os.path.join(self.target_folder, filename)
-        if not os.path.exists(path) or self.overwrite_existing:
+        if not self.no_images and (not os.path.exists(path) or self.overwrite_existing):
             cv2.imwrite(path, img)
 
         self.image_files.append(filename)
@@ -426,6 +427,7 @@ class TimedPoseExtractor:
         overwrite_existing: bool = False,
         remove_duplicates: bool = True,
         timezone: tzinfo = TIMEZONE_VIENNA,
+        no_images: bool = False,
     ) -> Sequence[tuple[int, int]]:
         """
         Method used to extract normalized video frames together with a JSON file describing the relative position between the first frame and the others
@@ -443,6 +445,7 @@ class TimedPoseExtractor:
         :param origin: Origin used for pose definition (only longitude, latitude and optionally altitude required). If None first position is used.
         :param overwrite_existing: Flag that signals if existing files should be overwritten. default is False.
         :param remove_duplicates: Flag that signals if duplicate frames should be removed. default is True.
+        :param no_images: If True, no per-frame image data is written to disk; only the poses.json file and the mask are created
         :return:
         """
         if isinstance(video_paths, str):
@@ -504,6 +507,7 @@ class TimedPoseExtractor:
                 target_folder=target_folder,
                 overwrite_existing=overwrite_existing,
                 selected_indices=selected_local,
+                no_images=no_images,
             )
 
             self.frame_accessor.access(
@@ -563,7 +567,7 @@ class TimedPoseExtractor:
             if include_time and frame.datetime is not None:
                 current_dict["timestamp"] = frame.datetime.isoformat()
 
-            if gps_writer is not None:
+            if gps_writer is not None and not no_images:
                 image_path = os.path.join(target_folder, image_file)
                 gps_writer.write_gps(
                     image_path,

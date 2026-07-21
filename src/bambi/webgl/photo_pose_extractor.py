@@ -587,6 +587,7 @@ class PhotoPoseExtractor:
                                         "*.tiff", "*.TIFF", "*.png", "*.PNG"),
         skip: int = 0,
         limit: Optional[int] = None,
+        no_images: bool = False,
     ) -> Dict[str, Any]:
         """
         Match photos to AirData entries, optionally undistort them, and
@@ -606,12 +607,16 @@ class PhotoPoseExtractor:
         :param extensions: Glob patterns for image files to include.
         :param skip: Number of matched photos (sorted by time) to skip from the start.
         :param limit: Maximum number of photos to process after skipping.
+        :param no_images: If True, no (undistorted) per-photo image data is
+            written to disk; only the poses.json file and — when calibration is
+            active — the undistortion mask are created.
         :return: The poses dict (same object written to disk).
         """
         if self._undistorter is not None and output_image_dir is None:
             raise ValueError(
                 "output_image_dir is required when calibration_res is "
-                "provided (undistorted images need to be written somewhere)."
+                "provided (the undistortion mask, and — unless no_images is "
+                "set — the undistorted images, need to be written somewhere)."
             )
 
         # -- collect image paths ------------------------------------------
@@ -646,6 +651,7 @@ class PhotoPoseExtractor:
         )
 
         # -- prepare output image directory if undistorting ----------------
+        # (still needed when no_images is set: the mask is written here)
         if self._undistorter is not None:
             os.makedirs(output_image_dir, exist_ok=True)
 
@@ -666,7 +672,12 @@ class PhotoPoseExtractor:
             # Undistort and save if calibration is available
             if self._undistorter is not None:
                 source_path = basename_to_path[filename]
-                self._undistort_and_save(source_path, filename, output_image_dir)
+                if no_images:
+                    # Still initialise the undistorter so fovy is available,
+                    # but do not write any image data.
+                    self._prepare_undistorter(source_path)
+                else:
+                    self._undistort_and_save(source_path, filename, output_image_dir)
 
             entry = self._build_image_entry(
                 filename, frame, origin_frame, origin_transformed
@@ -729,6 +740,24 @@ class PhotoPoseExtractor:
         mask[mask < 255] = 0
         cv2.imwrite(path, mask)
         return filename
+
+    def _prepare_undistorter(self, source_path: str) -> None:
+        """Initialise the undistorter's remap tables (and hence ``fovy``) from
+        an image's dimensions without writing anything to disk.
+
+        Used when *no_images* is set so that ``poses.json`` still carries a
+        calibration-derived fovy even though no undistorted images are written.
+        """
+        if self._undistorter is None or self._undistorter.is_initialized:
+            return
+        if self._thermal_colorizer is not None:
+            img = self._thermal_colorizer.load_as_bgr(source_path)
+        else:
+            img = cv2.imread(source_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise IOError(f"Could not read image: {source_path}")
+        h, w = img.shape[:2]
+        self._undistorter.prepare((w, h))
 
     def _undistort_and_save(
         self, source_path: str, filename: str, output_dir: str
@@ -908,11 +937,13 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
                                         "*.tiff", "*.TIFF", "*.png", "*.PNG"),
         skip: int = 0,
         limit: Optional[int] = None,
+        no_images: bool = False,
     ) -> Dict[str, Any]:
         if self._undistorter is not None and output_image_dir is None:
             raise ValueError(
                 "output_image_dir is required when calibration_res is "
-                "provided (undistorted images need to be written somewhere)."
+                "provided (the undistortion mask, and — unless no_images is "
+                "set — the undistorted images, need to be written somewhere)."
             )
 
         # -- collect image paths ------------------------------------------
@@ -944,6 +975,7 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
         )
 
         # -- prepare output image directory if undistorting ----------------
+        # (still needed when no_images is set: the mask is written here)
         if self._undistorter is not None:
             os.makedirs(output_image_dir, exist_ok=True)
 
@@ -963,7 +995,12 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
         for filename, frame in matched_items:
             if self._undistorter is not None:
                 source_path = basename_to_path[filename]
-                self._undistort_and_save(source_path, filename, output_image_dir)
+                if no_images:
+                    # Still initialise the undistorter so fovy is available,
+                    # but do not write any image data.
+                    self._prepare_undistorter(source_path)
+                else:
+                    self._undistort_and_save(source_path, filename, output_image_dir)
 
             entry = self._build_image_entry(
                 filename, frame, origin_frame, origin_transformed
@@ -1039,11 +1076,13 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
                                         "*.tiff", "*.TIFF", "*.png", "*.PNG"),
         skip: int = 0,
         limit: Optional[int] = None,
+        no_images: bool = False,
     ) -> Dict[str, Any]:
         if self._undistorter is not None and output_image_dir is None:
             raise ValueError(
                 "output_image_dir is required when calibration_res is "
-                "provided (undistorted images need to be written somewhere)."
+                "provided (the undistortion mask, and — unless no_images is "
+                "set — the undistorted images, need to be written somewhere)."
             )
 
         # -- collect image paths ------------------------------------------
@@ -1077,6 +1116,7 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
         )
 
         # -- prepare output image directory if undistorting ----------------
+        # (still needed when no_images is set: the mask is written here)
         if self._undistorter is not None:
             os.makedirs(output_image_dir, exist_ok=True)
 
@@ -1096,7 +1136,12 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
         for filename, frame in matched_items:
             if self._undistorter is not None:
                 source_path = basename_to_path[filename]
-                self._undistort_and_save(source_path, filename, output_image_dir)
+                if no_images:
+                    # Still initialise the undistorter so fovy is available,
+                    # but do not write any image data.
+                    self._prepare_undistorter(source_path)
+                else:
+                    self._undistort_and_save(source_path, filename, output_image_dir)
 
             entry = self._build_image_entry(
                 filename, frame, origin_frame, origin_transformed
