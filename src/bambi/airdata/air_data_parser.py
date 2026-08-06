@@ -89,7 +89,7 @@ class AirDataParser(AirDataParserInterface):
     def _ensure_file_pointer(file: Union[str, TextIO, TextIOBase]) -> Iterable[str]:
         t = type(file)
         if t == str:
-            return open(file, encoding="UTF-8")
+            return open(file, mode="r", encoding="utf-8-sig", newline="")
         elif t == TextIO or issubclass(t, TextIOBase):
             return file
         else:
