@@ -1,4 +1,7 @@
-# AlfsPy==0.0.0 # external https://github.com/bambi-eco/alfs_py!!!!
+# AlfsPy>=2.1.0 # external https://github.com/bambi-eco/alfs_py!!!!
+# Either alfspy backend works (alfs_py / ModernGL or alfs_pytorch / PyTorch);
+# see bambi/util/render_context.py.  2.1.0 is the first release providing
+# quaternion_from_drone_pose, which this package now uses for pose rotations.
 ultralytics==8.3.75
 torch==2.5.1
 torchvision==0.20.1

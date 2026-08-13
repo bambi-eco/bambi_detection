@@ -18,7 +18,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from moderngl import Context
 from pyrr import Quaternion, Vector3
 from trimesh import Trimesh
 
@@ -38,11 +37,12 @@ from alfspy.core.geo.transform import Transform
 from alfspy.core.rendering import Resolution, Camera, CtxShot, RenderResultMode, TextureData
 from alfspy.core.rendering.renderer import Renderer
 from alfspy.core.util.geo import get_aabb
-from alfspy.core.util.pyrrs import quaternion_from_eulers
+from alfspy.core.util.pyrrs import quaternion_from_drone_pose
 from alfspy.render.render import (
-    make_mgl_context, read_gltf, process_render_data,
+    read_gltf, process_render_data,
     make_shot_loader, release_all
 )
+from bambi.util.render_context import RenderContext, make_render_context
 
 
 from enum import Enum
@@ -1022,7 +1022,7 @@ def render_orthomosaic(
     logging.info(f"  Z: [{float(mesh_aabb.p_min.z):.2f}, {float(mesh_aabb.p_max.z):.2f}]")
 
     # Create OpenGL context
-    ctx = make_mgl_context()
+    ctx = make_render_context()
 
     # Load mask if provided
     mask = None
@@ -1117,7 +1117,7 @@ def render_orthomosaic(
 def load_all_shots(
         images_folder: str,
         matched_poses: dict,
-        ctx: Context,
+        ctx: RenderContext,
         corrections_data: Dict[str, Any],
         frame_filter: Optional[FrameFilter] = None,
         default_fovy: float = 60.0,
@@ -1179,8 +1179,7 @@ def load_all_shots(
             camera_rotation = [val % 360.0 for val in camera_rotation]
 
             if len(camera_rotation) == 3:
-                eulers = [np.deg2rad(val) for val in camera_rotation]
-                camera_rotation = quaternion_from_eulers(eulers, 'zyx')
+                camera_rotation = quaternion_from_drone_pose(camera_rotation)
             elif len(camera_rotation) == 4:
                 camera_rotation = Quaternion(camera_rotation)
             else:
@@ -1225,7 +1224,7 @@ def load_all_shots(
 
 
 def render_single_orthomosaic(
-        ctx: Context,
+        ctx: RenderContext,
         mesh_data,
         texture_data,
         shots: List[CtxShot],
@@ -1427,7 +1426,7 @@ def render_single_shot(
 
 
 def render_tiled_orthomosaic(
-        ctx: Context,
+        ctx: RenderContext,
         mesh_data,
         texture_data,
         shots: List[CtxShot],

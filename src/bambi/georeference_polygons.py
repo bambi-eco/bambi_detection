@@ -38,7 +38,8 @@ from scipy.signal import savgol_filter
 try:
     from alfspy.core.rendering import Resolution, Camera
     from alfspy.core.util.geo import get_aabb
-    from alfspy.render.render import make_mgl_context, read_gltf, process_render_data, release_all
+    from alfspy.render.render import read_gltf, process_render_data, release_all
+    from bambi.util.render_context import make_render_context
     from pyrr import Quaternion, Vector3
     from trimesh import Trimesh
     from pyproj import CRS, Transformer
@@ -444,7 +445,7 @@ def process_polygon_files(
     # Initialize ModernGL context and load DEM
     ctx = None
     try:
-        ctx = make_mgl_context()
+        ctx = make_render_context()
 
         if verbose:
             print("Loading DEM mesh...")

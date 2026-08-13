@@ -13,8 +13,9 @@ from alfspy.core.util.collections import CyclicList
 from alfspy.core.util.geo import get_aabb
 from alfspy.orthografic_projection import get_camera_for_frame
 from alfspy.render.data import BaseSettings, CameraPositioningMode
-from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, make_camera, make_shot_loader, \
+from alfspy.render.render import read_gltf, process_render_data, make_camera, make_shot_loader, \
     release_all
+from bambi.util.render_context import make_render_context
 
 from bambi.ai.models.ultralytics_yolo_detector import UltralyticsYoloDetector
 from bambi.ai.output.yolo_writer import YoloWriter
@@ -216,7 +217,7 @@ if __name__ == '__main__':
         tri_mesh = None
         try:
             # initialize the ModernGL context
-            ctx = make_mgl_context()
+            ctx = make_render_context()
 
             # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
@@ -269,8 +270,7 @@ if __name__ == '__main__':
                     rotation = [val % 360.0 for val in rotation]
                     rot_len = len(rotation)
                     if rot_len == 3:
-                        eulers = [np.deg2rad(val) for val in rotation]
-                        rotation = quaternion_from_eulers(eulers, 'zyx')
+                        rotation = quaternion_from_drone_pose(rotation)
                     else:
                         raise ValueError(f'Invalid rotation format of length {rot_len}: {rotation}')
 
@@ -423,7 +423,7 @@ if __name__ == '__main__':
         tri_mesh = None
         try:
             # initialize the ModernGL context
-            ctx = make_mgl_context()
+            ctx = make_render_context()
 
             # load digital elevation model
             mesh_data, texture_data = read_gltf(path_to_dem)
@@ -486,8 +486,7 @@ if __name__ == '__main__':
                         rotation = [val % 360.0 for val in rotation]
                         rot_len = len(rotation)
                         if rot_len == 3:
-                            eulers = [np.deg2rad(val) for val in rotation]
-                            rotation = quaternion_from_eulers(eulers, 'zyx')
+                            rotation = quaternion_from_drone_pose(rotation)
                         else:
                             raise ValueError(f'Invalid rotation format of length {rot_len}: {rotation}')
 

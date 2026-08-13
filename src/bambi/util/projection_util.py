@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from alfspy.core.convert import pixel_to_world_coord
 from alfspy.core.rendering import CtxShot
-from alfspy.core.util.pyrrs import quaternion_from_eulers
+from alfspy.core.util.pyrrs import quaternion_from_drone_pose
 from pyproj.enums import TransformDirection
 from pyrr import Vector3
 from shapely.geometry.multipolygon import MultiPolygon
@@ -21,8 +21,7 @@ def create_shot(image, image_metadata, ctx, correction):
     rotation = [val % 360.0 for val in rotation]
     rot_len = len(rotation)
     if rot_len == 3:
-        eulers = [np.deg2rad(val) for val in rotation]
-        rotation = quaternion_from_eulers(eulers, 'zyx')
+        rotation = quaternion_from_drone_pose(rotation)
     else:
         raise ValueError(f'Invalid rotation format of length {rot_len}: {rotation}')
 

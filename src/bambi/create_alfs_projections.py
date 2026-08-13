@@ -39,9 +39,10 @@ from alfspy.core.rendering import CtxShot
 from alfspy.core.util.geo import get_aabb
 from alfspy.render.data import BaseSettings, CameraPositioningMode
 from alfspy.render.render import (
-    make_mgl_context, make_camera, make_shot_loader,
+    make_camera, make_shot_loader,
     process_render_data, read_gltf, release_all,
 )
+from bambi.util.render_context import make_render_context
 from pyrr import Quaternion, Vector3
 from trimesh import Trimesh
 
@@ -267,7 +268,7 @@ def main() -> None:
     mesh_data   = None
     texture_data = None
     try:
-        ctx = make_mgl_context()
+        ctx = make_render_context()
         mesh_data, texture_data = read_gltf(path_to_dem)
         mesh_data, texture_data = process_render_data(mesh_data, texture_data)
         mesh_aabb = get_aabb(mesh_data.vertices)
