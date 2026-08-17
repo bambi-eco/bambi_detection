@@ -176,3 +176,10 @@ cython_debug/
 
 # local development environment
 .venv/
+
+# downloaded public flights (tests + notebooks cache here; see BAMBI_TEST_DATA / BAMBI_DATA_DIR)
+.test-data/
+# the Dataset repo clone the notebooks make on first run
+/Dataset/
+# executed-notebook scratch
+notebooks/**/*.nbconvert.ipynb

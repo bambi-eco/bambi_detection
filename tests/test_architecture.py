@@ -84,8 +84,9 @@ def test_module_imports_cleanly(module):
         if missing in _OPTIONAL:
             pytest.skip(f"optional dependency not installed: {missing}")
         raise
-    # ultralytics prints a banner on import; nothing of ours should.
-    noise = buf.getvalue().strip()
+    # ultralytics prints a banner on import (behind ANSI clear-line codes);
+    # nothing of ours should write anything.
+    noise = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|\r", "", buf.getvalue()).strip()
     if noise and not noise.startswith("Ultralytics"):
         pytest.fail(f"{module} writes to stdout/stderr on import: {noise[:120]!r}")
 
