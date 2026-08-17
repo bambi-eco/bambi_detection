@@ -163,6 +163,10 @@ def test_render_contexts_come_from_the_neutral_helper():
 #: scanner then holds it to array-in / array-out on its public functions.
 CONTRACT_MODULES = [
     "bambi.util.srt_air_data_converter",
+    # Phase 1, family 1 - extraction & poses
+    "bambi.geo.poses",
+    "bambi.geo.calibration",
+    # bambi.io.* is the file edge and is deliberately NOT here.
     # bambi.util.paths is deliberately NOT here: it is a path helper for the
     # io/cli edge, which is exactly what the contract keeps out of the engine.
 ]
