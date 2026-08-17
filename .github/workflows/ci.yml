@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Nightly: the slow tier and the notebooks against a cached public flight.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------ unit
+  unit:
+    name: unit (py${{ matrix.python }}, ${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+        backend: [torch]
+        include:
+          # One ModernGL leg proves the backend-neutral seam both ways. It
+          # needs a software GL stack, so it runs headless under Xvfb.
+          - python: "3.11"
+            backend: moderngl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: System libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg
+          if [ "${{ matrix.backend }}" = "moderngl" ]; then
+            sudo apt-get install -y --no-install-recommends xvfb libegl1 libgles2 mesa-utils
+          fi
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e . pytest pytest-cov
+      - name: Install alfspy backend (${{ matrix.backend }})
+        run: |
+          if [ "${{ matrix.backend }}" = "torch" ]; then
+            pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"
+          else
+            pip install "git+https://github.com/bambi-eco/alfs_py.git@v2.1.0" moderngl
+          fi
+      - name: Unit tests
+        run: |
+          if [ "${{ matrix.backend }}" = "moderngl" ]; then
+            xvfb-run -a pytest -m "not slow and not notebook" --cov=bambi --cov-report=term-missing
+          else
+            pytest -m "not slow and not notebook" --cov=bambi --cov-report=term-missing
+          fi
+
+  # ------------------------------------------------------------ slow + nb
+  data:
+    name: slow tier + notebooks (public flight)
+    runs-on: ubuntu-latest
+    # Nightly, on tags, or when asked - the flight download is ~450 MB.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: System libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg
+      - name: Install package + notebook deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e . pytest nbclient nbformat ipykernel matplotlib
+          pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"
+      - name: Restore cached public flight
+        id: flight-cache
+        uses: actions/cache@v4
+        with:
+          path: .test-data
+          # Bump the suffix to force a fresh download (e.g. new dataset version).
+          key: bambi-public-flight-v1
+      - name: Slow tier + notebooks
+        env:
+          BAMBI_TEST_DATA: ${{ github.workspace }}/.test-data
+        run: pytest -m "slow or notebook" -ra
