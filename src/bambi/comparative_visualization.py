@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-from src.bambi.video.video_writer import FFMPEGWriter
+from bambi.video.video_writer import FFMPEGWriter
 
 
 # ============================================================

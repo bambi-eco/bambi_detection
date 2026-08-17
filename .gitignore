@@ -173,3 +173,6 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 /src/bambi/sam3_segmentation.py
+
+# local development environment
+.venv/

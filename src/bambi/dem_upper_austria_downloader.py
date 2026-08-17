@@ -49,27 +49,35 @@ try:
     from rasterio.crs import CRS
     from rasterio.transform import from_bounds
     from rasterio.windows import from_bounds as window_from_bounds
-except ImportError:
-    print("Error: rasterio is required. Install with: pip install rasterio")
-    sys.exit(1)
+except ImportError as exc:
+    # A library module must not exit the interpreter on import; raise with
+    # the same guidance so both CLI users and importers see it.
+    raise ImportError(
+        'Error: rasterio is required. Install with: pip install rasterio' + f" ({exc})") from exc
 
 try:
     from pyproj import Transformer, CRS as PyprojCRS
-except ImportError:
-    print("Error: pyproj is required. Install with: pip install pyproj")
-    sys.exit(1)
+except ImportError as exc:
+    # A library module must not exit the interpreter on import; raise with
+    # the same guidance so both CLI users and importers see it.
+    raise ImportError(
+        'Error: pyproj is required. Install with: pip install pyproj' + f" ({exc})") from exc
 
 try:
     import requests
-except ImportError:
-    print("Error: requests is required. Install with: pip install requests")
-    sys.exit(1)
+except ImportError as exc:
+    # A library module must not exit the interpreter on import; raise with
+    # the same guidance so both CLI users and importers see it.
+    raise ImportError(
+        'Error: requests is required. Install with: pip install requests' + f" ({exc})") from exc
 
 try:
     from shapely.geometry import box, mapping
-except ImportError:
-    print("Error: shapely is required. Install with: pip install shapely")
-    sys.exit(1)
+except ImportError as exc:
+    # A library module must not exit the interpreter on import; raise with
+    # the same guidance so both CLI users and importers see it.
+    raise ImportError(
+        'Error: shapely is required. Install with: pip install shapely' + f" ({exc})") from exc
 
 # Setup logging
 logging.basicConfig(

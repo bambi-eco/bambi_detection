@@ -11,9 +11,9 @@ import cv2
 import numpy as np
 from pyproj import CRS, Transformer
 
-import src.bambi.georeferenced_tracking as gt
-from src.bambi.georeference_deepsort_mot import deviating_folders
-from src.bambi.video.video_writer import FFMPEGWriter
+import bambi.georeferenced_tracking as gt
+from bambi.util.paths import deviating_folders
+from bambi.video.video_writer import FFMPEGWriter
 import math
 
 

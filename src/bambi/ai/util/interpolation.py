@@ -2,7 +2,6 @@ from typing import List
 
 from bambi.ai.domain.BoundingBox import BoundingBox
 from bambi.ai.domain.Track import Track
-from bambi.util.util import chunker
 
 
 class TrackInterpolator:

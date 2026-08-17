@@ -8,7 +8,6 @@ from bambi.ai.output.track_writer import TrackWriter
 from bambi.ai.tracking import Tracking
 import numpy.typing as npt
 
-from bambi.util.resource_utils import get_resource
 from bambi.video.video_frame_accessor import VideoFrameAccessor
 
 
@@ -39,10 +38,10 @@ class UltralyticsYoloTracker(Tracking):
         self._min_confidence = min_confidence
         self._min_iou = min_iou
 
-        if tracker_file is not None:
-            self.__tracker_file = tracker_file
-        else:
-            self.__tracker_file = get_resource("ultralytics_bytetrack.yaml")
+        # ultralytics resolves its bundled tracker configs by bare name, so the
+        # default needs no resource file of our own (the old
+        # ``resource_utils`` helper came from the detached Pipeline project).
+        self.__tracker_file = tracker_file if tracker_file is not None else "bytetrack.yaml"
 
         super().__init__(detection_writer, labels)
 

@@ -21,7 +21,7 @@ import numpy as np
 from pyproj import Transformer
 from trimesh import Trimesh
 
-from src.bambi.srt.srt_parser import SrtParser
+from bambi.srt.srt_parser import SrtParser
 
 
 @dataclass

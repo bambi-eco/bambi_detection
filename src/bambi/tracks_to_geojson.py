@@ -8,8 +8,8 @@ from typing import Tuple, List, Dict
 
 from pyproj import Transformer, CRS
 
-from src.bambi.extend_geo_referenced_tracks import read_tracks_csv
-from src.bambi.georeference_deepsort_mot import deviating_folders
+from bambi.ai.input.tracks_csv_reader import read_tracks_csv
+from bambi.util.paths import deviating_folders
 
 
 def center_of_bbox(xmin: float, ymin: float, xmax: float, ymax: float) -> Tuple[float, float]:

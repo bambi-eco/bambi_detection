@@ -44,11 +44,12 @@ try:
     from trimesh import Trimesh
     from pyproj import CRS, Transformer
     from pyproj.enums import TransformDirection
-    from src.bambi.util.projection_util import label_to_world_coordinates
+    from bambi.util.projection_util import label_to_world_coordinates
 except ImportError as e:
-    print(f"Error: Missing required dependency: {e}")
-    print("Please ensure alfspy, pyproj, trimesh, and pyrr are installed.")
-    sys.exit(1)
+    # A library module must not exit the interpreter on import; raise with
+    # the same guidance so both CLI users and importers see it.
+    raise ImportError(
+        'Error: Missing required dependency: {e} Please ensure alfspy, pyproj, trimesh, and pyrr are installed.' + f" ({e})") from e
 
 # =============================================================================
 # CONFIGURATION

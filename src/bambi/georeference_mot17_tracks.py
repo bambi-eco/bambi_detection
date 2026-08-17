@@ -23,7 +23,7 @@ from pyrr import Quaternion, Vector3
 from trimesh import Trimesh
 from scipy.signal import savgol_filter
 
-from src.bambi.util.projection_util import label_to_world_coordinates
+from bambi.util.projection_util import label_to_world_coordinates
 
 from pyproj import CRS, Transformer
 

@@ -9,7 +9,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from src.bambi.georeference_deepsort_mot import deviating_folders
+from bambi.util.paths import deviating_folders
 
 
 @dataclass

@@ -7,7 +7,7 @@ name = "bambi-detection"
 version = "0.6.0"
 description = "BAMBI Detection: drone + AI pipeline for wildlife detection, projection, and georeferencing."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { file = "LICENSE.txt" }
 authors = [{ name = "bambi-eco" }]
 keywords = ["wildlife", "drones", "yolo", "computer-vision", "georeferencing", "light-field"]
@@ -16,6 +16,10 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
 ]
 
 # Let setuptools load deps from requirements.txt so you keep a single source of truth.
