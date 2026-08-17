@@ -208,7 +208,36 @@ def _collect_neighbor_shots(
     return shots_before, shots_after
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Render ALFS light-field integrals for extracted frames.')
+    parser.add_argument("--frames-dir", dest="FRAMES_DIR", default=r"146_frames/thermal")
+    parser.add_argument("--matched-poses-json", dest="MATCHED_POSES_JSON", default=r"146_frames/matched_poses.json")
+    parser.add_argument("--path-to-dem", dest="PATH_TO_DEM", default=r"path/to/dem_mesh.gltf")
+    parser.add_argument("--path-to-dem-json", dest="PATH_TO_DEM_JSON", default=r"")
+    parser.add_argument("--path-to-correction", dest="PATH_TO_CORRECTION", default=r"path/to/correction.json")
+    parser.add_argument("--output-dir", dest="OUTPUT_DIR", default="")
+    parser.add_argument("--skip-existing", dest="SKIP_EXISTING", action="store_false", help="default: True")
+    parser.add_argument("--limit", dest="LIMIT", type=int, default=-1)
+    parser.add_argument("--num-neighbors", dest="NUM_NEIGHBORS", type=int, default=100)
+    parser.add_argument("--neighbor-sample-rate", dest="NEIGHBOR_SAMPLE_RATE", type=int, default=10)
+    parser.add_argument("--ortho-width", dest="ORTHO_WIDTH", type=int, default=70)
+    parser.add_argument("--ortho-height", dest="ORTHO_HEIGHT", type=int, default=70)
+    parser.add_argument("--render-width", dest="RENDER_WIDTH", type=int, default=2048)
+    parser.add_argument("--render-height", dest="RENDER_HEIGHT", type=int, default=2048)
+    parser.add_argument("--fovy-fallback", dest="FOVY_FALLBACK", type=int, default=50)
+    parser.add_argument("--aspect-ratio", dest="ASPECT_RATIO", type=int, default=1)
+    args = parser.parse_args(argv)
+    # The body below reads the module constants; apply the CLI overrides to
+    # them so every former hard-coded value is settable from the command line.
+    global FRAMES_DIR, MATCHED_POSES_JSON, PATH_TO_DEM, PATH_TO_DEM_JSON, PATH_TO_CORRECTION, OUTPUT_DIR, SKIP_EXISTING, LIMIT, NUM_NEIGHBORS, NEIGHBOR_SAMPLE_RATE, ORTHO_WIDTH, ORTHO_HEIGHT, RENDER_WIDTH, RENDER_HEIGHT, FOVY_FALLBACK, ASPECT_RATIO
+    for _name, _value in vars(args).items():
+        globals()[_name] = _value
+    _run()
+
+
+def _run() -> None:
     path_to_dem      = PATH_TO_DEM
     path_to_dem_json = PATH_TO_DEM_JSON if PATH_TO_DEM_JSON else path_to_dem.replace(".gltf", ".json")
     output_dir       = OUTPUT_DIR if OUTPUT_DIR else FRAMES_DIR

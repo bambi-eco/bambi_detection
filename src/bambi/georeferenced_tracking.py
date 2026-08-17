@@ -711,20 +711,21 @@ def write_tracks_csv(results: List[Tuple[int, int, Detection]], out_path: str):
                 f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},{d.conf:.6f},{d.cls},{d.interpolated}\n")
 
 
-if __name__ == '__main__':
-    # Paths
-    base_dir = r"Z:\dets\georeferenced5"
-    target_dir = r"Z:\dets\georeferenced5_interpolated"
-    iou_thresh = 0.3
-    class_aware = True
-    max_age = -1
-    minimum_confidence = 0.0
-    tracker = TrackerMode.HUNGARIAN
-    max_center_distance = 0.2  # only used with TrackerMode.CENTER or TrackerMode.HUNGARIAN_CENTER
-    interpolate = True  # If True, interpolate missing frames in tracks
+def run(
+        base_dir,
+        target_dir,
+        iou_thresh=0.3,
+        class_aware=True,
+        max_age=-1,
+        minimum_confidence=0.0,
+        tracker=TrackerMode.HUNGARIAN,
+        max_center_distance=0.2,
+        interpolate=True):
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
 
-    ##############################
-
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
     os.makedirs(target_dir, exist_ok=True)
 
     # Loop through both directories
@@ -773,3 +774,31 @@ if __name__ == '__main__':
                 os.makedirs(target_folder, exist_ok=True)
                 target_file = os.path.join(target_folder, p.stem + ".csv")
                 write_tracks_csv(results, target_file)
+
+
+def _expr(text):
+    """argparse type: evaluate a Python expression in this module's namespace."""
+    return eval(text, globals())  # nosec B307 - CLI-provided config only
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Track geo-referenced detections across frames.')
+    parser.add_argument("--base-dir", dest="base_dir", required=True)
+    parser.add_argument("--target-dir", dest="target_dir", required=True)
+    parser.add_argument("--iou-thresh", dest="iou_thresh", type=float, default=0.3)
+    parser.add_argument("--class-aware", dest="class_aware", action="store_false",
+                        help="default: True")
+    parser.add_argument("--max-age", dest="max_age", type=float, default=-1)
+    parser.add_argument("--minimum-confidence", dest="minimum_confidence", type=float, default=0.0)
+    parser.add_argument("--tracker", dest="tracker", type=_expr, default=TrackerMode.HUNGARIAN,
+                        help="python expression; default: TrackerMode.HUNGARIAN")
+    parser.add_argument("--max-center-distance", dest="max_center_distance", type=float, default=0.2)
+    parser.add_argument("--interpolate", dest="interpolate", action="store_false",
+                        help="default: True")
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

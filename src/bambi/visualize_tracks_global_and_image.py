@@ -553,36 +553,32 @@ def draw_polygons_on_map(img, polygons, canvas_cfg, color=(255, 255, 0), alpha=0
 # MAIN
 # ============================================================
 
-if __name__ == "__main__":
-    # --- CONFIGURATION ---
-    georef_dets_base = r"Z:\dets\georeferenced5"
-    dets_base = r"Z:\dets\source"
 
-    # Image Paths
-    img_base = r"Z:\sequences"  # Thermal Images Base
-    rgb_base = r"Z:\14_1_rgb"  # RGB Images Base
+def run(
+        georef_dets_base,
+        dets_base,
+        img_base,
+        rgb_base,
+        target_base,
+        correction_folder,
+        add_corr_path,
+        fov_folder,
+        polygons_local_folder,
+        polygon_global_folder,
+        show_additional_polygons=False,
+        show_rgb=False,
+        iou_thresh=0.3,
+        show_live=True,
+        create_video=True,
+        delete_individual_frames=False,
+        source_epsg=32633,
+        show_map=True,
+        show_fov=True):
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
 
-    target_base = r"Z:\dets\georeferenced5\drawn_interpolated"
-
-    correction_folder = r"Z:\correction_data"
-    add_corr_path = r"Z:\correction_data\corrections.json"
-    fov_folder = r"Z:\dets\georeferenced_fov"
-
-    # New SAM Polygon Folders
-    polygons_local_folder = r"Z:\14_1_sam"
-    polygon_global_folder = r"Z:\14_1_sam_global"
-
-    # Toggles
-    show_additional_polygons = False  # Toggle for SAM visualization
-    show_rgb = False  # Toggle for RGB visualization
-
-    iou_thresh = 0.3
-    show_live = True
-    create_video = True
-    delete_individual_frames = False
-    source_epsg = 32633
-    show_map = True
-    show_fov = True
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
     track_ids: Optional[List[int]] = None
 
     map_tile_url = MapTileProvider.ESRI_SATELLITE
@@ -872,3 +868,40 @@ if __name__ == "__main__":
                     os.remove(f)
 
     cv2.destroyAllWindows()
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Draw geo-referenced tracks on frames and a map.')
+    parser.add_argument("--georef-dets-base", dest="georef_dets_base", required=True)
+    parser.add_argument("--dets-base", dest="dets_base", required=True)
+    parser.add_argument("--img-base", dest="img_base", required=True)
+    parser.add_argument("--rgb-base", dest="rgb_base", required=True)
+    parser.add_argument("--target-base", dest="target_base", required=True)
+    parser.add_argument("--correction-folder", dest="correction_folder", required=True)
+    parser.add_argument("--add-corr-path", dest="add_corr_path", required=True)
+    parser.add_argument("--fov-folder", dest="fov_folder", required=True)
+    parser.add_argument("--polygons-local-folder", dest="polygons_local_folder", required=True)
+    parser.add_argument("--polygon-global-folder", dest="polygon_global_folder", required=True)
+    parser.add_argument("--show-additional-polygons", dest="show_additional_polygons", action="store_true",
+                        help="default: False")
+    parser.add_argument("--show-rgb", dest="show_rgb", action="store_true",
+                        help="default: False")
+    parser.add_argument("--iou-thresh", dest="iou_thresh", type=float, default=0.3)
+    parser.add_argument("--show-live", dest="show_live", action="store_false",
+                        help="default: True")
+    parser.add_argument("--create-video", dest="create_video", action="store_false",
+                        help="default: True")
+    parser.add_argument("--delete-individual-frames", dest="delete_individual_frames", action="store_true",
+                        help="default: False")
+    parser.add_argument("--source-epsg", dest="source_epsg", type=int, default=32633)
+    parser.add_argument("--show-map", dest="show_map", action="store_false",
+                        help="default: True")
+    parser.add_argument("--show-fov", dest="show_fov", action="store_false",
+                        help="default: True")
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

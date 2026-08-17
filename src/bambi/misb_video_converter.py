@@ -923,9 +923,9 @@ class MISBVideoConverterDEM:
 def main():
     parser = argparse.ArgumentParser(description="MISB video converter (v7b)")
     parser.add_argument('--sequence-id', '-s', default="14_1")
-    parser.add_argument('--images-folder', '-i', default=r"Z:\sequences\test")
-    parser.add_argument('--data-folder', '-d', default=r"Z:\correction_data")
-    parser.add_argument('--output', '-o', default=r"Z:\misb\misb.ts")
+    parser.add_argument('--images-folder', '-i', required=True)
+    parser.add_argument('--data-folder', '-d', required=True)
+    parser.add_argument('--output', '-o', required=True)
     parser.add_argument('--fps', type=float, default=30.0)
     parser.add_argument('--codec', default='libx264')
     parser.add_argument('--crf', type=int, default=23)

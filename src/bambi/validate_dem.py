@@ -438,40 +438,34 @@ def batch_validate(dataset_root: Path,
 
     return results
 
-if __name__ == '__main__':
-    result = validate_dem_coverage(
-        Path(r"C:\Users\P41743\Desktop\flight_0\air_data.csv"),
-        Path(r"C:\Users\P41743\Desktop\flight_0\dem_mesh_r2.glb"),
-        margin_meters=0.0
-    )
-    print_result(result)
 
-    # parent_folder = Path(r"Z:\correction_data")
-    # correct_results = {}
-    # incorrect_results = {}
-    # glb_files = list(parent_folder.glob("*.glb"))
-    # for glb_file in glb_files:
-    #     id_ = glb_file.stem.replace("_dem", "")
-    #     print(f"Validating flight {id_}...")
-    #     poses_json = glb_file.with_name(f"{id_}_matched_poses.json")
-    #     dem_json = glb_file.with_name(f"{id_}_dem_mesh_r2.json")
-    #
-    #     result = validate_dem_coverage(
-    #         poses_json,
-    #         glb_file,
-    #         dem_json,
-    #         margin_meters=0.0
-    #     )
-    #
-    #     if result.is_valid:
-    #         correct_results[id_] = result
-    #     else:
-    #         incorrect_results[id_] = result
-    #
-    # if len(incorrect_results) > 0:
-    #     for key, item in incorrect_results.items():
-    #         print(key)
-    #         print_result(item)
-    #         print("="*60)
-    # else:
-    #     print("All DEM correct!")
+def run(air_data, dem, dem_json=None, margin_meters=0.0):
+    """Validate that a DEM covers a flight and print the report.
+
+    :param air_data: AirData CSV or poses JSON of the flight
+    :param dem: DEM mesh (.glb / .gltf)
+    :param dem_json: DEM metadata JSON (defaults to the mesh path with .json)
+    :param margin_meters: required margin between the flight and the DEM edge
+    """
+    result = validate_dem_coverage(Path(air_data), Path(dem),
+                                   Path(dem_json) if dem_json else None,
+                                   margin_meters=margin_meters)
+    print_result(result)
+    return result
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Check that a DEM covers a flight's poses.")
+    parser.add_argument("air_data", help="AirData CSV or poses JSON")
+    parser.add_argument("dem", help="DEM mesh (.glb / .gltf)")
+    parser.add_argument("--dem-json", help="DEM metadata JSON (default: derived from the mesh path)")
+    parser.add_argument("--margin", dest="margin_meters", type=float, default=0.0,
+                        help="required margin to the DEM edge in metres (default 0)")
+    args = parser.parse_args(argv)
+    run(args.air_data, args.dem, args.dem_json, args.margin_meters)
+
+
+if __name__ == "__main__":
+    main()

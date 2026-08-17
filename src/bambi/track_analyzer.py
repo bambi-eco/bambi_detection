@@ -534,15 +534,6 @@ Examples:
         """
     )
 
-    import sys
-    sys.argv = [sys.argv[0],
-        "--input-folder", r"Z:\Hugo\mot_georeferenced",
-        "--output-folder", r"Z:\Hugo\mot_georeferenced",
-        "--output-suffix", "csv",
-        "-t", "1.0",
-        "--min-outliers-ratio", "0.2",
-        "--verbose"
-    ]
 
     # Single file mode arguments
     single_group = parser.add_argument_group('Single file mode')

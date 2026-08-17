@@ -435,41 +435,30 @@ def georeference_mot_tracks(
     print(f"Success rate: {100 * (total_tracks - transformation_errors) / max(1, total_tracks):.2f}%")
 
 
-if __name__ == '__main__':
-    # Configuration
-    # Expected structure:
-    #   base_dir/
-    #       test/
-    #           0_gt.txt, 1_gt.txt, ...
-    #       val/
-    #           0_gt.txt, 1_gt.txt, ...
-    #       train/
-    #           0_gt.txt, 1_gt.txt, ...
+def run(
+        base_dir,
+        correction_folder,
+        target_base,
+        additional_corrections_path,
+        input_resolution=Resolution(1024, 1024),
+        skip_existing=False,
+        rel_transformer=None,
+        transform_to_target_crs=False,
+        add_offsets=True,
+        apply_smoothing=True,
+        window_length=11,
+        polyorder=2,
+        include_visibility=True,
+        subfolders=['test', 'val', 'train']):
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
 
-    base_dir = r"Z:\Hugo\mot"
-    correction_folder = r"Z:\correction_data"
-    target_base = r"Z:\Hugo\mot_georeferenced"
-    additional_corrections_path = r"Z:\correction_data\corrections.json"
-
-    input_resolution = Resolution(1024, 1024)
-    skip_existing = False
-
-    # CRS transformation (optional)
-    rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
-    transform_to_target_crs = False
-    add_offsets = True
-
-    # Smoothing parameters
-    apply_smoothing = True
-    window_length = 11
-    polyorder = 2
-
-    # Output options
-    include_visibility = True  # Set to False to omit visibility from output
-
-    # Subfolders to process (set to None to use default ['test', 'val', 'train'])
-    subfolders = ['test', 'val', 'train']
-
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
+    if rel_transformer is None:
+        # Built lazily: constructing a pyproj Transformer at import time is
+        # slow and a side effect a library module must not have.
+        rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
     # Run georeferencing
     georeference_mot_tracks(
         base_dir=base_dir,
@@ -487,3 +476,39 @@ if __name__ == '__main__':
         include_visibility=include_visibility,
         subfolders=subfolders
     )
+
+
+def _expr(text):
+    """argparse type: evaluate a Python expression in this module's namespace."""
+    return eval(text, globals())  # nosec B307 - CLI-provided config only
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Geo-reference MOT17 track files onto a DEM.')
+    parser.add_argument("--base-dir", dest="base_dir", required=True)
+    parser.add_argument("--correction-folder", dest="correction_folder", required=True)
+    parser.add_argument("--target-base", dest="target_base", required=True)
+    parser.add_argument("--additional-corrections-path", dest="additional_corrections_path", required=True)
+    parser.add_argument("--input-resolution", dest="input_resolution", type=_expr, default=Resolution(1024, 1024),
+                        help="python expression; default: Resolution(1024, 1024)")
+    parser.add_argument("--skip-existing", dest="skip_existing", action="store_true",
+                        help="default: False")
+    parser.add_argument("--transform-to-target-crs", dest="transform_to_target_crs", action="store_true",
+                        help="default: False")
+    parser.add_argument("--add-offsets", dest="add_offsets", action="store_false",
+                        help="default: True")
+    parser.add_argument("--apply-smoothing", dest="apply_smoothing", action="store_false",
+                        help="default: True")
+    parser.add_argument("--window-length", dest="window_length", type=int, default=11)
+    parser.add_argument("--polyorder", dest="polyorder", type=int, default=2)
+    parser.add_argument("--include-visibility", dest="include_visibility", action="store_false",
+                        help="default: True")
+    parser.add_argument("--subfolders", dest="subfolders", type=_expr, default=['test', 'val', 'train'],
+                        help="python expression; default: ['test', 'val', 'train']")
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

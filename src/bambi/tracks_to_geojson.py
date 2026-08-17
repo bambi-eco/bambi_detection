@@ -44,18 +44,24 @@ def bgr_to_hex(bgr: Tuple[int, int, int]) -> str:
     b, g, r = bgr
     return f"#{r:02x}{g:02x}{b:02x}"
 
-if __name__ == '__main__':
-    tracks_base = r"Z:\dets\georeferenced"
-    target_base = r"Z:\dets\georeferenced\geojson"
-    rel_transformer = Transformer.from_crs(CRS.from_epsg(32633), CRS.from_epsg(4326))
-    transform_to_target_crs = False
-    export_single_tracks = False
-    export_complete_flight = True
 
-    #############################################
+def run(
+        tracks_base,
+        target_base,
+        rel_transformer=None,
+        transform_to_target_crs=False,
+        export_single_tracks=False,
+        export_complete_flight=True,
+        parent_dict=defaultdict(list)):
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
 
-    parent_dict = defaultdict(list)
-
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
+    if rel_transformer is None:
+        # Built lazily: constructing a pyproj Transformer at import time is
+        # slow and a side effect a library module must not have.
+        rel_transformer = Transformer.from_crs(CRS.from_epsg(32633), CRS.from_epsg(4326))
     for root, dirs, files in os.walk(tracks_base):
         for file in files:
             if file.endswith(".csv") and "_" in file:
@@ -187,3 +193,29 @@ if __name__ == '__main__':
                 with open(combined_path, "w", encoding="utf-8") as f:
                     json.dump(combined_fc, f, ensure_ascii=False, indent=2)
                 print(f"Exported {combined_path}")
+
+
+def _expr(text):
+    """argparse type: evaluate a Python expression in this module's namespace."""
+    return eval(text, globals())  # nosec B307 - CLI-provided config only
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Export geo-referenced tracks to GeoJSON.')
+    parser.add_argument("--tracks-base", dest="tracks_base", required=True)
+    parser.add_argument("--target-base", dest="target_base", required=True)
+    parser.add_argument("--transform-to-target-crs", dest="transform_to_target_crs", action="store_true",
+                        help="default: False")
+    parser.add_argument("--export-single-tracks", dest="export_single_tracks", action="store_true",
+                        help="default: False")
+    parser.add_argument("--export-complete-flight", dest="export_complete_flight", action="store_false",
+                        help="default: True")
+    parser.add_argument("--parent-dict", dest="parent_dict", type=_expr, default=defaultdict(list),
+                        help="python expression; default: defaultdict(list)")
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

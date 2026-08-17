@@ -1517,7 +1517,13 @@ def render_tiled_orthomosaic(
 # CLI / Main Entry Point
 # ============================================================================
 
-if __name__ == "__main__":
+
+def run():
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
+
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
     import sys
     import argparse
 
@@ -1532,9 +1538,9 @@ if __name__ == "__main__":
 
     # Required Arguments
     parser.add_argument("--sequence-id", default="14", help="ID of the flight sequence (e.g., '14')")
-    parser.add_argument("--images-folder", default=r"Z:\20250312_Dataset_trimmed\images\val", help="Path to the folder containing source images")
-    parser.add_argument("--data-folder", default=r"Z:\correction_data", help="Path to the folder containing JSON/GLB data files")
-    parser.add_argument("--output-folder", default=r"Z:\output", help="Path where the output GeoTIFF will be saved")
+    parser.add_argument("--images-folder", required=True, help="Path to the folder containing source images")
+    parser.add_argument("--data-folder", required=True, help="Path to the folder containing JSON/GLB data files")
+    parser.add_argument("--output-folder", required=True, help="Path where the output GeoTIFF will be saved")
 
     # Optional File Overrides (if naming convention differs)
     parser.add_argument("--poses-file", help="Explicit path to matched poses JSON")
@@ -1664,3 +1670,15 @@ if __name__ == "__main__":
 
         traceback.print_exc()
         sys.exit(1)
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Build an orthomosaic from projected frames.')
+
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

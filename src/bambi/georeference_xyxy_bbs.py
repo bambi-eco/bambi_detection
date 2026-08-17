@@ -250,29 +250,31 @@ def save_georeferenced_fov(
     output_file.write(f"{frame_idx} {len(valid_points)} {coords_str}\n")
 
 
-if __name__ == '__main__':
-    # Paths
-    base_dir = r"Z:\dets\source"
-    correction_folder = r"Z:\correction_data"
-    target_base = r"Z:\dets\georeferenced5"
-    additional_corrections_path = r"Z:\correction_data\corrections.json"
-    input_resolution = Resolution(1024, 1024)
-    skip_existing = False
-    rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
-    transform_to_target_crs = False
-    add_offsets = True
+def run(
+        base_dir,
+        correction_folder,
+        target_base,
+        additional_corrections_path,
+        fov_output_folder,
+        input_resolution=Resolution(1024, 1024),
+        skip_existing=False,
+        rel_transformer=None,
+        transform_to_target_crs=False,
+        add_offsets=True,
+        apply_smoothing=True,
+        window_length=11,
+        polyorder=2,
+        georeference_fov_mask=True,
+        mask_simplify_epsilon=2.0):
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
 
-    # choose an odd window length, e.g. 11 frames, and low poly order
-    apply_smoothing = True
-    window_length = 11  # tune this based on your frame rate / flight dynamics
-    polyorder = 2
-
-    georeference_fov_mask = True  # Set to True to also georeference the binary mask
-    mask_simplify_epsilon = 2.0  # Polygon simplification factor (higher = fewer points)
-    fov_output_folder = r"Z:\dets\georeferenced_fov"  # Output folder for FOV polygons
-
-    ##################################################################################
-
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
+    if rel_transformer is None:
+        # Built lazily: constructing a pyproj Transformer at import time is
+        # slow and a side effect a library module must not have.
+        rel_transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633))
     with open(additional_corrections_path) as f:
         all_additional_corrections = json.load(f)
 
@@ -538,3 +540,39 @@ if __name__ == '__main__':
     if georeference_fov_mask:
         print(
             f"FOV mask: Could not transform {fov_transformation_errors} polygon points across {total_fov_frames} frames")
+
+
+def _expr(text):
+    """argparse type: evaluate a Python expression in this module's namespace."""
+    return eval(text, globals())  # nosec B307 - CLI-provided config only
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Geo-reference xyxy detection boxes onto a DEM.')
+    parser.add_argument("--base-dir", dest="base_dir", required=True)
+    parser.add_argument("--correction-folder", dest="correction_folder", required=True)
+    parser.add_argument("--target-base", dest="target_base", required=True)
+    parser.add_argument("--additional-corrections-path", dest="additional_corrections_path", required=True)
+    parser.add_argument("--input-resolution", dest="input_resolution", type=_expr, default=Resolution(1024, 1024),
+                        help="python expression; default: Resolution(1024, 1024)")
+    parser.add_argument("--skip-existing", dest="skip_existing", action="store_true",
+                        help="default: False")
+    parser.add_argument("--transform-to-target-crs", dest="transform_to_target_crs", action="store_true",
+                        help="default: False")
+    parser.add_argument("--add-offsets", dest="add_offsets", action="store_false",
+                        help="default: True")
+    parser.add_argument("--apply-smoothing", dest="apply_smoothing", action="store_false",
+                        help="default: True")
+    parser.add_argument("--window-length", dest="window_length", type=int, default=11)
+    parser.add_argument("--polyorder", dest="polyorder", type=int, default=2)
+    parser.add_argument("--georeference-fov-mask", dest="georeference_fov_mask", action="store_false",
+                        help="default: True")
+    parser.add_argument("--mask-simplify-epsilon", dest="mask_simplify_epsilon", type=float, default=2.0)
+    parser.add_argument("--fov-output-folder", dest="fov_output_folder", required=True)
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

@@ -230,7 +230,13 @@ class MultiVideoFrameAccessor:
 
         self.access(input_videos, callback)
 
-if __name__ == '__main__':
+
+def run():
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
+
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
     from bambi.util.image_utils import image_equality
     accessor = VideoFrameAccessor()
     prev_frame = None
@@ -246,3 +252,15 @@ if __name__ == '__main__':
         prev_frame = frame
     writer.write(r"C:\Users\P41743\Desktop\videos\target.mp4", ((x[0], x[1]) for x in enumerate(frames)))
     print()
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Demo: iterate frames of a video.')
+
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

@@ -562,21 +562,21 @@ Examples:
     parser.add_argument(
         "-s", "--source",
         type=Path,
-        default=r"Z:\14_1_sam",
+        required=True,
         help="Source folder containing local polygon files"
     )
 
     parser.add_argument(
         "-t", "--target",
         type=Path,
-        default=r"Z:\14_1_sam_global",
+        required=True,
         help="Target folder for georeferenced polygon files"
     )
 
     parser.add_argument(
         "-c", "--correction-folder",
         type=str,
-        default=r"Z:\correction_data",
+        required=True,
         help="Folder containing correction data files (poses, DEM, corrections)"
     )
 

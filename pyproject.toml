@@ -25,6 +25,28 @@ classifiers = [
 # Let setuptools load deps from requirements.txt so you keep a single source of truth.
 dynamic = ["dependencies"]
 
+[project.scripts]
+# One console entry per hoisted script. Names mirror the module names so
+# `bambi-<name> --help` always finds the right tool.
+bambi-pipeline = "bambi.bambi_detection:main"
+bambi-georeference-boxes = "bambi.georeference_xyxy_bbs:main"
+bambi-georeference-mot = "bambi.georeference_mot17_tracks:main"
+bambi-georeference-polygons = "bambi.georeference_polygons:main"
+bambi-track = "bambi.georeferenced_tracking:main"
+bambi-tracks-to-geojson = "bambi.tracks_to_geojson:main"
+bambi-track-analyzer = "bambi.track_analyzer:main"
+bambi-visualize-tracks = "bambi.visualize_tracks_global_and_image:main"
+bambi-alfs = "bambi.create_alfs_projections:main"
+bambi-ortho = "bambi.create_orthographic_projections:main"
+bambi-orthomosaic = "bambi.orthomosaic:main"
+bambi-geotiff = "bambi.drone_geotiff_generator:main"
+bambi-dem-austria = "bambi.dem_upper_austria_downloader:main"
+bambi-dem-flat = "bambi.generate_flat_surface_dem:main"
+bambi-validate-dem = "bambi.validate_dem:main"
+bambi-add-utm = "bambi.add_utm_to_airdata:main"
+bambi-misb = "bambi.misb_video_converter:main"
+bambi-compare = "bambi.comparative_visualization:main"
+
 [project.urls]
 Homepage = "https://github.com/bambi-eco/bambi_detection"
 Repository = "https://github.com/bambi-eco/bambi_detection"

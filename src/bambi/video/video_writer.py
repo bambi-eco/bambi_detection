@@ -433,9 +433,13 @@ class PipeFFMPEGWriter(AbstractVideoWriter):
         )
 
 
-if __name__ == '__main__':
-    mypath = r"C:\Users\P41743\Desktop\res"
+def run(
+        mypath):
+    """Script body, hoisted from ``__main__`` so it is importable and testable.
 
+    Every parameter mirrors one of the former hard-coded configuration values;
+    the defaults are unchanged.
+    """
     onlyfiles = [f for f in os.listdir(mypath) if f.endswith(".png")]
     def sort_function(string: str):
         return int(Path(string).stem)
@@ -446,3 +450,15 @@ if __name__ == '__main__':
     video_path = os.path.join(mypath, "video.mp4")
     gen = ((idx, cv2.imread(x)) for (idx, x) in enumerate(onlyfiles))
     writer.write(video_path, gen)
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Demo: write a video.')
+    parser.add_argument("--mypath", dest="mypath", required=True)
+    run(**vars(parser.parse_args(argv)))
+
+
+if __name__ == "__main__":
+    main()

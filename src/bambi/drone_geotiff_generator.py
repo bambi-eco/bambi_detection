@@ -785,11 +785,11 @@ Example:
 
     parser.add_argument('--sequence-id', '-s', type=str, default="14_1",
                         help='Sequence identifier (e.g., "14_1")')
-    parser.add_argument('--images-folder', '-i', type=str, default=r"Z:\sequences\test",
+    parser.add_argument('--images-folder', '-i', type=str, required=True,
                         help='Folder containing sequence images')
-    parser.add_argument('--data-folder', '-d', type=str, default=r"Z:\correction_data",
+    parser.add_argument('--data-folder', '-d', type=str, required=True,
                         help='Folder containing DEM, poses, and correction files')
-    parser.add_argument('--output-folder', '-o', type=str, default=r"Z:\geotiffs",
+    parser.add_argument('--output-folder', '-o', type=str, required=True,
                         help='Output folder for GeoTIFF files')
 
     parser.add_argument('--resolution', type=float, default=0.1,

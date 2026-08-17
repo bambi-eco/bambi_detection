@@ -32,7 +32,24 @@ from bambi.util.projection_util import *
 import webcolors
 from ultralytics.utils import LOGGER as ultralyticsLogger
 
-if __name__ == '__main__':
+
+def run(videos=None, air_data_path=None, target_folder=None, path_to_dem=None,
+        path_to_calibration=None, path_to_flight_correction=None, camera_name=None,
+        model_path=None, target_epsg=None, sample_rate=None, limit=None,
+        steps=None):
+    """Reference BAMBI pipeline, hoisted from ``__main__`` so it is importable.
+
+    Every keyword overrides one of the former hard-coded configuration values;
+    ``None`` keeps that value's default. ``steps`` is a dict merged over
+    ``steps_to_do``. The body is deliberately left as one procedural block: its
+    decomposition into ``bambi.pipeline`` steps is the subject of the layer-split
+    Phase 1, and this function is the parity oracle for it.
+    """
+    _overrides = {k: v for k, v in dict(
+        videos=videos, air_data_path=air_data_path, target_folder=target_folder,
+        path_to_dem=path_to_dem, path_to_calibration=path_to_calibration,
+        path_to_flight_correction=path_to_flight_correction, camera_name=camera_name,
+        model_path=model_path, sample_rate=sample_rate, limit=limit).items() if v is not None}
     # Define steps to do
     steps_to_do = {
         # Step 1: if frames are already available from previous export, set to false, otherwise it will also delete existing exports!
@@ -120,6 +137,21 @@ if __name__ == '__main__':
     #####################################################################################################################################################################
     #####################################################################################################################################################################
     #####################################################################################################################################################################
+    # Apply CLI / caller overrides on top of the defaults defined above.
+    if "videos" in _overrides: videos = _overrides["videos"]; srts = [s.replace(".MP4", ".SRT") for s in videos]
+    if "air_data_path" in _overrides: air_data_path = _overrides["air_data_path"]
+    if "target_folder" in _overrides: target_folder = _overrides["target_folder"]
+    if "path_to_dem" in _overrides:
+        path_to_dem = _overrides["path_to_dem"]; path_to_dem_json = path_to_dem.replace(".gltf", ".json").replace(".glb", ".json")
+    if "path_to_calibration" in _overrides: path_to_calibration = _overrides["path_to_calibration"]
+    if "path_to_flight_correction" in _overrides: path_to_flight_correction = _overrides["path_to_flight_correction"]
+    if "camera_name" in _overrides: camera_name = _overrides["camera_name"]
+    if "model_path" in _overrides: model_path = _overrides["model_path"]
+    if "sample_rate" in _overrides: sample_rate = _overrides["sample_rate"]
+    if "limit" in _overrides: limit = _overrides["limit"]
+    if target_epsg is not None: target_crs = CRS.from_epsg(target_epsg)
+    if steps: steps_to_do.update(steps)
+
     print(f"Cuda is available {torch.cuda.is_available()}")
     input_crs = CRS.from_epsg(4326) # WGS 84 coordinates. Don't change since GeoJSON won't work with another CRS.
 
@@ -724,3 +756,37 @@ if __name__ == '__main__':
     end_time = time.time()
     print(f"Step 5 took {end_time - step5_start} seconds")
     print(f"Total process finished in {end_time - start_time} seconds.")
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Reference BAMBI pipeline: extract, project, detect, geo-reference, export.")
+    parser.add_argument("--video", dest="videos", action="append", metavar="MP4",
+                        help="thermal/RGB video (repeatable, in flight order); SRTs are derived")
+    parser.add_argument("--air-data", dest="air_data_path", metavar="CSV")
+    parser.add_argument("--target-folder", dest="target_folder", metavar="DIR")
+    parser.add_argument("--dem", dest="path_to_dem", metavar="GLTF/GLB")
+    parser.add_argument("--calibration", dest="path_to_calibration", metavar="JSON")
+    parser.add_argument("--correction", dest="path_to_flight_correction", metavar="JSON")
+    parser.add_argument("--camera", dest="camera_name", choices=["T", "W"])
+    parser.add_argument("--model", dest="model_path", metavar="PT")
+    parser.add_argument("--target-epsg", dest="target_epsg", type=int)
+    parser.add_argument("--sample-rate", dest="sample_rate", type=int)
+    parser.add_argument("--limit", dest="limit", type=int)
+    parser.add_argument("--step", dest="steps", action="append", metavar="NAME=BOOL",
+                        help="override a steps_to_do entry, e.g. --step extract_frames=true")
+    args = parser.parse_args(argv)
+    steps = None
+    if args.steps:
+        steps = {}
+        for item in args.steps:
+            name, _, val = item.partition("=")
+            steps[name] = val.strip().lower() in ("1", "true", "yes", "on")
+    kw = vars(args); kw["steps"] = steps
+    run(**kw)
+
+
+if __name__ == "__main__":
+    main()
