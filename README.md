@@ -51,29 +51,73 @@ bambi_detection/
 
 ### Prerequisites
 
-- Python 3.8+
-- CUDA-capable GPU (recommended for inference)
+- Python 3.9 - 3.12
+- one alfspy rendering backend (see below); a CUDA GPU is optional and used automatically by the PyTorch backend
 
 ### Installation
 
-1. **Install alfs_py dependency**
+```bash
+pip install "git+https://github.com/bambi-eco/bambi_detection.git@v0.6.0"
 
-   This repository requires the [alfs_py project](https://github.com/bambi-eco/alfs_py) which is not available on PyPI:
+# and ONE alfspy backend - both install the same `alfspy` package, so pick one:
+pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"   # PyTorch, no OpenGL needed
+pip install "git+https://github.com/bambi-eco/alfs_py.git@v2.1.0"        # ModernGL
+```
 
-   ```bash
-   pip install <path-to-alfs_py-project>
-   ```
+Nothing in `bambi` names a backend: render contexts come from `bambi.util.render_context`, which uses whichever build is installed (and, on the PyTorch build, selects CUDA when it is available). Results of the two agree to well under one 8-bit level.
 
-2. **Install Python dependencies**
+### Command-line tools
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+Every script installs as a console command; `--help` describes each. Inputs are explicit arguments - there are no hard-coded paths.
 
+| Command | Does |
+|---|---|
+| `bambi-pipeline` | the reference pipeline: extract, project, detect, geo-reference, export |
+| `bambi-georeference-boxes` / `-mot` / `-polygons` | geo-reference detections, MOT tracks, SAM polygons onto a DEM |
+| `bambi-track`, `bambi-tracks-to-geojson`, `bambi-track-analyzer`, `bambi-visualize-tracks` | tracking in world coordinates and its exports |
+| `bambi-alfs`, `bambi-ortho`, `bambi-orthomosaic`, `bambi-geotiff` | ALFS integrals, orthographic projection, orthomosaics, GeoTIFFs |
+| `bambi-dem-austria`, `bambi-dem-flat`, `bambi-validate-dem` | DEM download / generation / coverage check |
+| `bambi-add-utm`, `bambi-misb`, `bambi-compare` | AirData UTM columns, MISB video, tracker comparison grids |
+
+The same functionality is importable: each command is `module.main(argv)` over a `module.run(...)` you can call from Python.
+
+### Notebooks
+
+`notebooks/` walks through the framework on the public [BAMBI dataset](https://github.com/bambi-eco/Dataset), in the style of that repository's `introduction.ipynb`. Start with `00_setup.ipynb`; every notebook downloads what it needs through the Dataset repo's own scripts and caches it. They run headless in CI, so they are always current.
+
+## Developing
+
+### The two-repo loop with the QGIS plugin
+
+The [BAMBI QGIS plugin](https://github.com/bambi-eco/Bambi-QGIS) is the GUI shell over this engine. During development install this repo *editable* into the interpreter QGIS uses, so plugin work never waits on a release:
+
+```bash
+# Windows, QGIS 3.34 LTR - adjust the path to your install
+"C:\Program Files\QGIS 3.34.14in\o4w_env.bat"
+python -m pip install -e C:\path	oambi_detection
+```
+
+Restart QGIS afterwards. The plugin's Dependency Manager reports the installed version; an editable install shows the checkout's `pyproject.toml` version. For users, the plugin installs the pinned release tag instead (`BAMBI_DETECTION_TAG` in the plugin's `core/dependency_ops.py`, guarded by tests so the pin and its version floor move together).
+
+### Tests
+
+```bash
+pip install -e . pytest pytest-cov nbclient nbformat ipykernel
+pytest                          # fast unit tier, a few seconds, no data
+pytest -m "slow or notebook"    # downloads a public flight once into .test-data/ (or $BAMBI_TEST_DATA)
+```
+
+`tests/test_architecture.py` states the rules the layer split depends on and checks them structurally on every commit: every module imports silently, nothing imports QGIS or a rendering backend directly, and - on the modules written to it - the numpy contract holds (array in / array out on public functions, no paths, no record dicts).
+
+CI runs the unit tier on Python 3.9 and 3.12 against the PyTorch backend and once on 3.11 against ModernGL under Xvfb; the slow tier and notebooks run nightly, on tags and on demand.
+
+### Releasing
+
+Bump `version` in `pyproject.toml`, tag `vX.Y.Z`, push the tag. The plugin then bumps `BAMBI_DETECTION_TAG` and its version floor together.
 
 ## Configuration
 
-The main script `bambi_detection.py` is configured through variables at the top of the file:
+The reference pipeline (`bambi-pipeline`, module `bambi.bambi_detection`) is configured through `run(...)` keyword arguments / CLI flags; the values below are the defaults it starts from. `--step name=true|false` toggles a stage, `--video`, `--air-data`, `--dem`, `--calibration`, `--correction`, `--target-folder`, `--model` set the inputs.
 
 ### Processing Steps
 
@@ -129,28 +173,11 @@ Our YOLO11 model is available on [Hugginface](https://huggingface.co/cpraschl/ba
 
 1. **Prepare input data** (see [Input Data Requirements](#input-data-requirements))
 
-2. **Configure paths** in `bambi_detection.py`:
-   ```python
-   videos = [
-       r"path/to/video1.MP4",
-       r"path/to/video2.MP4"
-   ]
-   srts = [srt.replace(".MP4", ".SRT") for srt in videos]
-   air_data_path = r"path/to/air_data.csv"
-   target_folder = r"path/to/output"
-   path_to_dem = r"path/to/dem.gltf"
-   path_to_calibration = r"path/to/calib.json"
-   path_to_flight_correction = r"path/to/correction.json"
-   camera_name = "T"  # "T" for Thermal, "W" for Wide
-   target_crs = CRS.from_epsg(32633)  # Must match DEM CRS
-   ```
-
-3. **Enable desired steps** in `steps_to_do`
-
-4. **Run the script**:
+2. **Run the pipeline**:
    ```bash
-   python src/bambi/bambi_detection.py
+   bambi-pipeline --video flight/DJI_0001_T.MP4 --video flight/DJI_0002_T.MP4        --air-data flight/air_data.csv --dem flight/dem_mesh_r2.gltf        --calibration flight/T_calib.json --correction flight/correction.json        --target-folder flight/target --camera T --target-epsg 32633        --step extract_frames=true --step detect_animals=true
    ```
+   or from Python: `from bambi.bambi_detection import run; run(videos=[...], ...)`.
 
 ### Pipeline Stages
 
@@ -172,7 +199,7 @@ Beyond the main `bambi_detection.py` pipeline, the repository includes several s
 Creates side-by-side grid visualizations comparing ground truth annotations with multiple tracker outputs for Multi-Object Tracking (MOT) evaluation. Useful for ablation studies and tracker performance comparison.
 
 ```bash
-python comparative_visualization.py <tracking_results_base> <sequences_base> <output_base>
+bambi-compare <tracking_results_base> <sequences_base> <output_base>
 ```
 
 Features:
@@ -189,7 +216,7 @@ Features:
 Projects drone video frames onto a Digital Elevation Model and exports georeferenced GeoTIFF files compatible with GIS software.
 
 ```bash
-python drone_geotiff_generator.py --sequence-id <ID> --images-folder <path> \
+bambi-geotiff --sequence-id <ID> --images-folder <path> \
     --data-folder <path> --output-folder <path>
 ```
 
@@ -214,26 +241,13 @@ Features:
 
 ---
 
-#### `georeference_deepsort_mot.py`
-**Georeference DeepSORT MOT Results**
-
-Converts pixel-space tracking results (from DeepSORT or similar trackers) to world coordinates using camera poses and DEM raytracing.
-
-Features:
-- Pose smoothing using Savitzky-Golay filter to reduce GPS jitter
-- Projects bounding box corners to 3D world coordinates
-- Supports batch processing of multiple sequences
-- Handles coordinate system transformations (WGS84 ↔ UTM)
-
----
-
 #### `georeference_polygons.py`
 **Georeference SAM3 Polygons**
 
 Converts local (pixel-space) polygon annotations from segmentation models (e.g., SAM3) to georeferenced world coordinates.
 
 ```bash
-python georeference_polygons.py --source ./local_polygons --target ./georeferenced_polygons \
+bambi-georeference-polygons --source ./local_polygons --target ./georeferenced_polygons \
     --correction-folder ./correction_data --flight-id 223
 ```
 
@@ -255,7 +269,7 @@ Output format (per line):
 Creates videos with embedded KLV metadata tracks following the MISB ST 0601.17 standard. Output is compatible with QGIS and other GIS applications that support MISB metadata for drone video overlay.
 
 ```bash
-python misb_video_converter.py --sequence-id <ID> --images-folder <path> \
+bambi-misb --sequence-id <ID> --images-folder <path> \
     --poses-file <path> --output <path.mp4>
 ```
 
@@ -422,8 +436,6 @@ Standard YOLO format:
 ## Known Issues
 
 ### GLTFLib/Trimesh Index Error
-
-## Known Issues
 
 We are using `GLTFLib` for reading the digital elevation models and are converting it to a mesh using `Trimesh` and some internal functions.
 However, sometimes the `Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)` constructor raises an `IndexError`, when building up this mesh.
