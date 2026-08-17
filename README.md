@@ -85,6 +85,11 @@ The same functionality is importable: each command is `module.main(argv)` over a
 
 `notebooks/` walks through the framework on the public [BAMBI dataset](https://github.com/bambi-eco/Dataset), in the style of that repository's `introduction.ipynb`. Start with `00_setup.ipynb`; every notebook downloads what it needs through the Dataset repo's own scripts and caches it. They run headless in CI, so they are always current.
 
+| Notebook | Shows |
+|---|---|
+| `01_frames_and_poses` | raw video -> undistorted frames + DEM-local poses; the calibration check; the pose conventions |
+| `02_georeference` | annotations of flight 146 onto a real DEM (`bambi.geo.camera`, `bambi.geo.georef`); a synthetic oblique scene proving the pointing maths at 45/80 degrees, and what the old rotation got wrong |
+
 ## Developing
 
 ### The two-repo loop with the QGIS plugin

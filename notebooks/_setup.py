@@ -112,6 +112,35 @@ def find(folder: Path, *patterns: str) -> list[Path]:
     return sorted(out)
 
 
+def get_dem(flight_id: str, version: str = "base") -> Path:
+    """The flight's DEM mesh (``DEM/<id>_matched_dem.glb`` + ``.json``), made if missing.
+
+    Three sources, cheapest first:
+
+    1. already in the flight folder (a previous run);
+    2. a GeoTIFF clip shipped with the repo under ``tests/fixtures/dem`` -
+       ~0.4 MB, meshed on the spot with :func:`bambi.io.dem.geotiff_to_dem`
+       (this is what CI uses);
+    3. the Dataset repo's ``dem_from_poses.py``, which downloads the BEV
+       1 m ALS tile covering the flight (~10 GB for one tile - do it once).
+    """
+    folder = get_flight(flight_id, version) / "DEM"
+    glb = folder / f"{flight_id}_matched_dem.glb"
+    if glb.exists() and glb.with_suffix(".json").exists():
+        return glb
+    fixture = REPO / "tests" / "fixtures" / "dem" / f"{flight_id}_matched_dem.tif"
+    if fixture.exists():
+        from bambi.io.dem import geotiff_to_dem
+        folder.mkdir(parents=True, exist_ok=True)
+        print(f"meshing bundled DEM clip {fixture.name} -> {glb}")
+        geotiff_to_dem(fixture, glb, simplify=2)
+        return glb
+    poses = next(get_flight(flight_id, version).glob("*_poses.json"))
+    _run([sys.executable, str(DATASET_DIR / "dem_from_poses.py"), "--file", str(poses),
+          "--output-dir", str(folder)], cwd=str(DATASET_DIR))
+    return glb
+
+
 def clean_cache() -> None:
     """Delete the flight cache (use sparingly - a flight is hundreds of MB)."""
     if DATA_DIR.exists():

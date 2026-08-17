@@ -166,6 +166,11 @@ CONTRACT_MODULES = [
     # Phase 1, family 1 - extraction & poses
     "bambi.geo.poses",
     "bambi.geo.calibration",
+    # Phase 1, family 2 - geo-referencing
+    "bambi.geo.camera",
+    "bambi.geo.georef",
+    "bambi.geo.dem",
+    "bambi.testing.synthetic",
     # bambi.io.* is the file edge and is deliberately NOT here.
     # bambi.util.paths is deliberately NOT here: it is a path helper for the
     # io/cli edge, which is exactly what the contract keeps out of the engine.
