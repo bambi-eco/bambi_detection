@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- `bambi.io.geotiff.write_geotiff` (light-field integral GeoTIFF: alpha band kept, overviews,
-  `.prj`) and `bambi.render.ortho.render_integral_tiled` (tiled ALFS render, footprint-filtered
-  shots, optional crop) - the plugin's `_save_alfs` / tiled ALFS path; notebook 05 writes both
-  GeoTIFF kinds.
-
 ## 1.0.0 - 2026-08-18
 
 The first release of bambi-detection as the *engine* under the BAMBI QGIS
@@ -42,13 +35,16 @@ result is array-shaped. File formats live in `bambi.io.*` only. Enforced by
   coverage grids, line-transect distance sampling, and the naive /
   bootstrap / zero-inflated negative binomial population estimators
   (reproduce the glmmTMB reference analysis).
-- `bambi.render.*` - orthophotos, light-field integrals, tiling, mask
-  polygons and their ground footprints, the per-frame GeoTIFF recipe.
+- `bambi.render.*` - orthophotos, light-field integrals (also tiled over large
+  extents with footprint-filtered shots), tiling, mask polygons and their
+  ground footprints, the per-frame GeoTIFF recipe.
 - `bambi.testing.synthetic` - terrain + markers + poses at any tilt for
   exact-truth tests.
 - `bambi.io.*` - poses, calibration, corrections (four dialects), DEM
   (GLB + metadata, GeoTIFF), tracks tables, TRex tracklets, survey files,
-  rasters and GeoTIFFs; writers byte-identical to the plugin's formats.
+  rasters, per-frame orthophoto GeoTIFFs (nodata rim, world file) and
+  light-field GeoTIFFs (alpha band kept, overviews, `.prj`), orthomosaic
+  merge; writers byte-identical to the plugin's formats.
 - `bambi.util.render_context` - backend-neutral alfspy contexts (ModernGL or
   PyTorch build).
 - 18 console commands (`bambi-pipeline`, `bambi-georeference-*`,
