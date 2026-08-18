@@ -23,7 +23,7 @@ from bambi.geo.poses import Origin, make_origin
 PathLike = Union[str, Path]
 
 __all__ = ["DemMesh", "read_dem_mesh", "read_dem_metadata", "write_dem_mesh",
-           "read_geotiff_elevation", "geotiff_to_dem", "dem_origin"]
+           "read_geotiff_elevation", "geotiff_to_dem", "dem_origin", "read_render_data", "render_data_from_arrays"]
 
 
 @dataclass(frozen=True)
@@ -220,3 +220,26 @@ def geotiff_to_dem(geotiff_path: PathLike, mesh_path: PathLike, simplify: int = 
     }
     write_dem_mesh(mesh_path, vertices, faces, metadata)
     return read_dem_mesh(mesh_path)
+
+
+def read_render_data(mesh_path: PathLike):
+    """The DEM as alfspy render data -> ``(mesh_data, texture_data)`` for :mod:`bambi.render`.
+
+    ``read_gltf`` + ``process_render_data`` (a checkerboard texture is
+    generated when the file has none), exactly what the plugin's rendering
+    steps feed the renderer.
+    """
+    from alfspy.render.render import process_render_data, read_gltf
+
+    mesh_data, texture_data = read_gltf(str(mesh_path))
+    return process_render_data(mesh_data, texture_data)
+
+
+def render_data_from_arrays(vertices: ArrayLike, faces: ArrayLike):
+    """Synthetic terrain -> alfspy render data (no file): ``(mesh_data, texture_data)``."""
+    import tempfile
+    from pathlib import Path as _P
+
+    with tempfile.TemporaryDirectory() as td:
+        p = write_dem_mesh(_P(td) / "scene.glb", vertices, faces)
+        return read_render_data(p)

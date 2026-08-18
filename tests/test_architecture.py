@@ -180,6 +180,9 @@ CONTRACT_MODULES = [
     "bambi.survey.density",
     "bambi.survey.distance_sampling",
     "bambi.survey.population",
+    # Phase 1, family 5 - rendering
+    "bambi.render.masks",
+    "bambi.render.ortho",
     # bambi.io.* is the file edge and is deliberately NOT here.
     # bambi.util.paths is deliberately NOT here: it is a path helper for the
     # io/cli edge, which is exactly what the contract keeps out of the engine.
