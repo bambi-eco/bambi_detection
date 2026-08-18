@@ -70,6 +70,8 @@ The same functionality is importable: each command is `module.main(argv)` over a
 
 `notebooks/` walks through the framework on the public [BAMBI dataset](https://github.com/bambi-eco/Dataset), in the style of that repository's `introduction.ipynb`. Start with `00_setup.ipynb`; every notebook downloads what it needs through the Dataset repo's own scripts and caches it. They run headless in CI, so they are always current.
 
+The sources are committed without outputs; **executed copies with all plots and numbers are in [`notebooks/rendered/`](notebooks/rendered/)** - open those on GitHub to read the results without running anything (`python notebooks/render_all.py` regenerates them).
+
 | Notebook | Shows |
 |---|---|
 | `01_frames_and_poses` | raw video -> undistorted frames + DEM-local poses; the calibration check; the pose conventions |

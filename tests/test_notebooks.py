@@ -55,3 +55,20 @@ def test_notebooks_are_committed_without_outputs():
         if any(c.get("outputs") for c in nb.cells if c.cell_type == "code"):
             dirty.append(p.name)
     assert not dirty, f"strip outputs before committing: {dirty}"
+
+
+def test_rendered_copies_exist_for_every_notebook():
+    """notebooks/rendered/ holds the executed copies GitHub shows; a new notebook
+    needs one (python notebooks/render_all.py) and it must carry outputs."""
+    rendered = NOTEBOOKS_DIR / "rendered"
+    missing = [p.name for p in NOTEBOOKS if not (rendered / p.name).exists()]
+    assert not missing, f"run notebooks/render_all.py for: {missing}"
+    for p in NOTEBOOKS:
+        nb = nbformat.read(rendered / p.name, as_version=4)
+        outputs = [o for c in nb.cells if c.cell_type == "code" for o in c.get("outputs", [])]
+        assert outputs, f"{p.name}: rendered copy has no outputs"
+        assert not any(o.get("output_type") == "error" for o in outputs), f"{p.name}: rendered copy has errors"
+        # same code cells as the source, in order (the copy is not stale in code)
+        src = nbformat.read(p, as_version=4)
+        assert [c.source for c in src.cells if c.cell_type == "code"] == \
+            [c.source for c in nb.cells if c.cell_type == "code"], f"{p.name}: rendered copy is out of date"
