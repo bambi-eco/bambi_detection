@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 DATASET_REPO = "https://github.com/bambi-eco/Dataset.git"
-BAMBI_TAG = "v0.6.0"                 # bumped by the release process
+BAMBI_TAG = "v1.0.0"                 # bumped by the release process
 ALFS_TORCH_TAG = "v1.1.1"
 
 HERE = Path(__file__).resolve().parent

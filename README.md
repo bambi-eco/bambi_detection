@@ -15,37 +15,22 @@ Based on this technology, an AI-powered system can detect and automatically clas
 - **Track Management**: Track objects across video frames with interpolation and simplification utilities
 - **Visualization**: Generate annotated videos and track visualizations
 
-## Project Structure
+## The engine at a glance
 
-```
-bambi_detection/
-├── src/
-│   └── bambi/
-│       ├── ai/                          # AI detection and tracking
-│       │   ├── domain/                  # BoundingBox and Track classes
-│       │   ├── input/                   # Annotation readers (YOLO, MOT, Labelbox)
-│       │   ├── models/                  # Wrapper of Ultralytics YOLO detector and tracker
-│       │   ├── output/                  # Annotation writers
-│       │   ├── util/                    # Filtering, tracking, interpolation
-│       │   └── visualization/           # Bounding box and track visualization
-│       ├── airdata/                     # DJI AirData flight log parsing
-│       ├── domain/                      # Drone, Camera, Sensor definitions
-│       ├── geo/                         # GPS EXIF writing utilities
-│       ├── srt/                         # DJI SRT subtitle parsing
-│       ├── util/                        # Image, math, and projection utilities
-│       ├── video/                       # Video frame access and writing
-│       ├── webgl/                       # Pose extraction from flight data
-│       ├── bambi_detection.py           # Main processing pipeline
-│       ├── comparative_visualization.py # Compare detection results
-│       ├── drone_geotiff_generator.py   # Generate GeoTIFF outputs
-│       ├── georeferenced_tracking.py    # Georeferenced object tracking
-│       ├── georeference_polygons.py     # Georeference polygon annotations
-│       ├── orthomosaic.py               # Generate GeoTIFF outputs
-│       ├── tracks_to_geojson.py         # Export tracks as GeoJSON
-│       └── visualize_tracks_global_and_image.py
-├── requirements.txt
-└── README.md
-```
+`bambi` is the computational engine under the [BAMBI QGIS plugin](https://github.com/bambi-eco/Bambi-QGIS): the plugin is the GUI, this package does the work. Its public surface follows one rule - **arrays in, arrays out**: functions take numpy arrays (plus scalars, small frozen dataclasses of arrays, and established objects such as alfspy cameras or shapely geometries) and return arrays wherever the result is array-shaped. Files are read and written only in `bambi.io.*`.
+
+| Package | Does |
+|---|---|
+| `bambi.geo` | poses and DEM-local frames, camera calibration checks and undistortion, poses -> alfspy cameras, pixels -> ground on the DEM, elevation grids -> meshes |
+| `bambi.tracking` | the built-in IoU/Hungarian tracker with gap interpolation; cross-modal thermal/RGB track matching |
+| `bambi.survey` | transects and flight-route geometry, perpendicular distances, KDE density and coverage grids, line-transect distance sampling, naive / bootstrap / ZINB population estimation |
+| `bambi.render` | orthophotos, light-field (ALFS) integrals, tiling, mask polygons and their footprints - through either alfspy backend |
+| `bambi.io` | the pipeline's file formats: poses, calibrations, corrections, DEMs, detection/track tables, TRex tracklets, survey files, rasters and GeoTIFFs |
+| `bambi.testing` | synthetic terrain + markers + poses at any tilt, for exact-truth tests |
+| `bambi.util.render_context` | backend-neutral alfspy contexts (ModernGL or PyTorch build) |
+| `bambi.ai`, `bambi.airdata`, `bambi.srt`, `bambi.video`, `bambi.webgl`, ... | detection models and annotation formats, DJI logs, video access, frame/pose extraction (the 0.x modules, unchanged) |
+
+Every capability is shown on the public dataset in `notebooks/` and, where the plugin has an output for it, asserted equal to the plugin's in `tests/test_parity_*.py`.
 
 ## Setup
 
@@ -57,7 +42,7 @@ bambi_detection/
 ### Installation
 
 ```bash
-pip install "git+https://github.com/bambi-eco/bambi_detection.git@v0.6.0"
+pip install "git+https://github.com/bambi-eco/bambi_detection.git@v1.0.0"
 
 # and ONE alfspy backend - both install the same `alfspy` package, so pick one:
 pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"   # PyTorch, no OpenGL needed
