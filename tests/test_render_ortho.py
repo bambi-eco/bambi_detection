@@ -152,3 +152,27 @@ def test_polygon_to_world_legacy_matches_the_one_pixel_box_recipe(scene):
         assert np.allclose(got[i], ref)
     exact = masks.polygon_to_world(poly, camera, FRAME[0], FRAME[1], scene.mesh, legacy=False)
     assert np.all(np.isfinite(exact)) and np.linalg.norm(exact - got, axis=1).max() < 0.5
+
+
+def test_tiled_integral_equals_the_untiled_one(scene, render_data, ctx):
+    mesh_data, texture_data = render_data
+    idx = [0, 1]
+    shots = [ortho.make_shot(ctx, np.full((FRAME[1], FRAME[0], 3), v, np.uint8), scene.poses.positions[i],
+                             scene.poses.rotations[i], FOVY, 1.0, lazy=False) for i, v in zip(idx, (80, 180))]
+    fps = [georef.footprint(cam.camera_from_pose(scene.poses.positions[i], scene.poses.rotations[i], FOVY), FRAME[0],
+                            FRAME[1], scene.mesh) for i in idx]
+    bounds = masks.polygon_bounds(np.vstack(fps))
+    size = ortho.render_size(bounds[2] - bounds[0], bounds[3] - bounds[1], 0.5)
+    whole = ortho.render_orthographic(ctx, mesh_data, texture_data, shots, bounds, size, integral=True,
+                                      auto_contrast=False)
+    tiled, tb = ortho.render_integral_tiled(ctx, mesh_data, texture_data, shots, bounds, size, max_tile=64,
+                                            auto_contrast=False, shot_footprints=fps)
+    assert tb == bounds and tiled.shape == whole.shape
+    cov_w, cov_t = whole[:, :, 3] > 0, tiled[:, :, 3] > 0
+    assert (cov_w == cov_t).mean() > 0.995                              # same footprint, tile seams aside
+    both = cov_w & cov_t
+    assert np.abs(tiled[:, :, :3][both].astype(int) - whole[:, :, :3][both].astype(int)).mean() < 3
+    cropped, cb = ortho.render_integral_tiled(ctx, mesh_data, texture_data, shots, bounds, size, max_tile=64,
+                                              auto_contrast=False, crop=True)
+    assert cropped.shape[0] <= tiled.shape[0] and cropped.shape[1] <= tiled.shape[1]
+    assert cb[0] >= bounds[0] and cb[2] <= bounds[2]

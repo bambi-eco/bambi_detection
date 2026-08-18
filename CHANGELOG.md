@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `bambi.io.geotiff.write_geotiff` (light-field integral GeoTIFF: alpha band kept, overviews,
+  `.prj`) and `bambi.render.ortho.render_integral_tiled` (tiled ALFS render, footprint-filtered
+  shots, optional crop) - the plugin's `_save_alfs` / tiled ALFS path; notebook 05 writes both
+  GeoTIFF kinds.
+
 ## 1.0.0 - 2026-08-18
 
 The first release of bambi-detection as the *engine* under the BAMBI QGIS

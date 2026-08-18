@@ -29,6 +29,7 @@ from numpy.typing import ArrayLike, NDArray
 
 __all__ = ["render_size", "make_shot", "make_shots", "ortho_camera", "render_orthographic", "tiles", "tile_bounds",
            "tile_camera", "erode_valid_mask", "mask_texture", "crop_to_content", "frame_orthophoto", "shot_rotation",
+           "render_integral_tiled",
            "ROTATION_CONVENTIONS", "Bounds"]
 
 Bounds = Tuple[float, float, float, float]      # (min_x, min_y, max_x, max_y) DEM-local
@@ -293,3 +294,68 @@ def frame_orthophoto(ctx, mesh_data, texture_data, mesh, image: Union[str, Array
     if edge_erosion_px > 0:
         valid = erode_valid_mask(valid, edge_erosion_px)
     return rgba[:, :, :3], valid, bounds
+
+
+def render_integral_tiled(ctx, mesh_data, texture_data, shots: Sequence[object], bounds: Bounds,
+                          size: Tuple[int, int], max_tile: int = 4096, camera_height: Optional[float] = None,
+                          mask=None, auto_contrast: bool = True, crop: bool = False,
+                          shot_footprints: Optional[Sequence[ArrayLike]] = None
+                          ) -> Tuple[NDArray[np.uint8], Bounds]:
+    """The light-field integral of many shots over a large extent, tile by tile.
+
+    The plugin's ALFS step: the raster is cut into ``max_tile`` pixel tiles
+    (:func:`tiles`), each rendered with its own orthographic sub-camera
+    (:func:`tile_camera`) from only the shots whose footprint touches it
+    (when ``shot_footprints`` - one ``(K, 2|3)`` ground polygon per shot -
+    are given), and the tiles are assembled into one ``(H, W, 4)`` uint8
+    RGBA image. ``crop=True`` trims fully transparent margins and returns
+    the shrunk bounds.
+
+    :return: ``(image, bounds)``
+    """
+    from alfspy.core.rendering import Resolution
+    from alfspy.core.rendering.renderer import Renderer
+
+    shots = list(shots)
+    if camera_height is None:
+        camera_height = float(np.asarray(mesh_data.vertices)[:, 2].max()) + 100.0
+    w, h = int(size[0]), int(size[1])
+    out = np.zeros((h, w, 4), dtype=np.uint8)
+    global_cam = ortho_camera(bounds, camera_height)
+    fp_bounds = None
+    if shot_footprints is not None:
+        fp_bounds = []
+        for fp in shot_footprints:
+            q = np.atleast_2d(np.asarray(fp, dtype=np.float64))[:, :2]
+            q = q[np.isfinite(q).all(axis=1)]
+            fp_bounds.append(None if len(q) == 0 else (q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()))
+    for tile in tiles((w, h), max_tile):
+        tx, ty, tw, th = (int(v) for v in tile)
+        tb = tile_bounds(bounds, (w, h), tile)
+        if fp_bounds is None:
+            tile_shots = shots
+        else:
+            tile_shots = [s for s, fb in zip(shots, fp_bounds)
+                          if fb is not None and fb[0] <= tb[2] and fb[2] >= tb[0] and fb[1] <= tb[3] and fb[3] >= tb[1]]
+        if not tile_shots:
+            continue
+        renderer = Renderer(Resolution(tw, th), ctx, tile_camera(global_cam, bounds, (w, h), tile), mesh_data,
+                            texture_data)
+        try:
+            img = renderer.render_integral(tile_shots, mask=mask, save=False, release_shots=False,
+                                           auto_contrast=auto_contrast)
+        finally:
+            renderer.release()
+        if img is None:
+            continue
+        arr = np.array(img)
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        if arr.ndim == 2:
+            arr = np.dstack([arr, arr, arr, np.full_like(arr, 255)])
+        elif arr.shape[2] == 3:
+            arr = np.dstack([arr, np.full(arr.shape[:2], 255, dtype=np.uint8)])
+        out[ty:ty + th, tx:tx + tw] = arr[:th, :tw]
+    if crop:
+        return crop_to_content(out, bounds)
+    return out, bounds

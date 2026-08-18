@@ -78,7 +78,7 @@ The sources are committed without outputs; **executed copies with all plots and 
 | `02_georeference` | annotations of flight 146 onto a real DEM (`bambi.geo.camera`, `bambi.geo.georef`); a synthetic oblique scene proving the pointing maths at 45/80 degrees, and what the old rotation got wrong |
 | `03_tracking` | the built-in tracker (`bambi.tracking.iou`) re-linking flight 146's annotations - in pixels vs on the ground; gap interpolation and the plugin's `tracks.csv`; TRex tracklet import (`bambi.io.trex`); cross-modal thermal/RGB track matching (`bambi.tracking.matching`) |
 | `04_survey_analytics` | perpendicular distances to the flight route, distance sampling (detection function, ESW, density), KDE density and coverage rasters, transects with monitored area and the naive / bootstrap / ZINB population estimators (`bambi.survey`), validated against glmmTMB |
-| `05_rendering` | frames on the terrain: per-frame orthophoto GeoTIFFs, an average orthomosaic and overlap count, a light-field integral of a frame window (`bambi.render`, `bambi.io.geotiff`), and the render/ray-cast agreement at 45 degrees on the synthetic scene |
+| `05_rendering` | frames on the terrain: per-frame orthophoto GeoTIFFs, an average orthomosaic and overlap count, a light-field integral of a frame window rendered in tiles and written as an alpha-band GeoTIFF (`bambi.render`, `bambi.io.geotiff`), and the render/ray-cast agreement at 45 degrees on the synthetic scene |
 
 ## Developing
 
