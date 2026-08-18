@@ -119,3 +119,10 @@ def test_write_rejects_length_mismatch(tmp_path):
     poses = to_local_poses(src, epsg=32633)
     with pytest.raises(ValueError):
         write_poses(tmp_path / "bad.json", poses, ["only-one.jpg"])
+
+
+def test_epochs_from_timestamps():
+    from bambi.io.poses import epochs_from_timestamps
+    e = epochs_from_timestamps(["2023-01-19T11:39:00+01:00", "", "garbage", "2023-01-19T11:39:01.5+01:00"])
+    assert np.isnan(e[1]) and np.isnan(e[2])
+    assert e[3] - e[0] == pytest.approx(1.5)

@@ -193,3 +193,23 @@ def write_poses(path: PathLike, poses: Poses, imagefiles: List[str],
     out["origin"] = poses.origin.as_dict()
     out["images"] = images
     Path(path).write_text(json.dumps(out, indent=1), encoding="utf-8")
+
+
+def epochs_from_timestamps(timestamps) -> "np.ndarray":
+    """ISO-8601 timestamps (with timezone, as the extractors write them) ->
+    ``(N,)`` epoch seconds, NaN where missing or unparseable.
+
+    Thermal and RGB frames share this clock (it is the SRT capture time), so
+    it is what :func:`bambi.tracking.matching.match_frames_by_time` pairs on.
+    """
+    from datetime import datetime
+
+    out = np.full(len(timestamps), np.nan)
+    for i, ts in enumerate(timestamps):
+        if not ts:
+            continue
+        try:
+            out[i] = datetime.fromisoformat(str(ts)).timestamp()
+        except (ValueError, TypeError):
+            pass
+    return out

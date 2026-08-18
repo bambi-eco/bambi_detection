@@ -27,6 +27,9 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
+    "new_camera_matrix",
+    "undistort_points",
+    "undistort_boxes",
     "CalibrationCheck",
     "implied_resolution",
     "check_resolution",
@@ -110,18 +113,20 @@ def check_resolution(mtx: ArrayLike, width: int, height: int,
     return CalibrationCheck(severity, deviation, float(cal_w), float(cal_h), scale)
 
 
-def fovy_after_undistortion(mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int],
-                            new_size: Tuple[int, int], alpha: float = 0.5,
-                            force_same_fov: bool = True) -> float:
-    """Vertical field of view (degrees) of frames the extractors will produce.
+def new_camera_matrix(mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int],
+                      new_size: Tuple[int, int], alpha: float = 0.5,
+                      force_same_fov: bool = True) -> NDArray[np.float64]:
+    """The intrinsics of the *undistorted* frames the extractors produce.
 
-    Reproduces the extractors' recipe - ``getOptimalNewCameraMatrix`` with the
-    principal point centred, then (optionally) forcing equal fx/fy - so a
-    caller can predict the ``fovy`` a poses file will carry, or check one.
+    ``getOptimalNewCameraMatrix`` with the principal point centred, then
+    (optionally) fx = fy = max(fx, fy). This is the one recipe the extractors,
+    the poses' ``fovy`` and every pixel-space import (TRex) must share; a
+    point undistorted with a different matrix lands on the wrong pixel of
+    the extracted frame.
 
-    :param mtx: 3x3 intrinsic matrix
+    :param mtx: 3x3 intrinsic matrix of the raw camera
     :param dist: distortion coefficients (4, 5 or 8)
-    :param src_size: ``(width, height)`` of the source video/photo
+    :param src_size: ``(width, height)`` of the raw video/photo
     :param new_size: ``(width, height)`` of the extracted frames
     :param alpha: OpenCV free-scaling parameter (extractors use 0.5)
     :param force_same_fov: set fx = fy = max(fx, fy) like the extractors
@@ -137,5 +142,58 @@ def fovy_after_undistortion(mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int
     if force_same_fov:
         f = max(new_mtx[0, 0], new_mtx[1, 1])
         new_mtx[0, 0] = new_mtx[1, 1] = f
+    return new_mtx
+
+
+def fovy_after_undistortion(mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int],
+                            new_size: Tuple[int, int], alpha: float = 0.5,
+                            force_same_fov: bool = True) -> float:
+    """Vertical field of view (degrees) of frames the extractors will produce.
+
+    :func:`new_camera_matrix` turned into an angle, so a caller can predict
+    the ``fovy`` a poses file will carry, or check one.
+    """
+    import cv2
+
+    new_mtx = new_camera_matrix(mtx, dist, src_size, new_size, alpha, force_same_fov)
     _, fovy, _, _, _ = cv2.calibrationMatrixValues(new_mtx, tuple(int(v) for v in new_size), 1, 1)
     return float(fovy)
+
+
+def undistort_points(points: ArrayLike, mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int],
+                     new_size: Tuple[int, int], alpha: float = 0.5,
+                     force_same_fov: bool = True) -> NDArray[np.float64]:
+    """Raw-video pixels -> pixels of the undistorted, extracted frame.
+
+    Maps ``(N, 2)`` ``[x, y]`` measured on the raw video (what an external
+    tracker such as TRex sees) into the frame space the poses were built for.
+    ``force_same_fov`` must match how the frames were extracted; the
+    extractors force it always, the QGIS plugin's TRex import only for
+    square frames.
+
+    :return: ``(N, 2)`` float64
+    """
+    import cv2
+
+    pts = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
+    if len(pts) == 0:
+        return np.zeros((0, 2))
+    m = _matrix(mtx)
+    d = np.asarray(dist, dtype=np.float64).reshape(1, -1)
+    ncm = new_camera_matrix(m, d, src_size, new_size, alpha, force_same_fov)
+    out = cv2.undistortPoints(pts, m, d, P=ncm)
+    return np.asarray(out, dtype=np.float64).reshape(-1, 2)
+
+
+def undistort_boxes(boxes: ArrayLike, mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int],
+                    new_size: Tuple[int, int], alpha: float = 0.5,
+                    force_same_fov: bool = True) -> NDArray[np.float64]:
+    """``(N, 4)`` xyxy raw-video boxes -> axis-aligned boxes around their
+    four undistorted corners, in extracted-frame pixels."""
+    b = np.asarray(boxes, dtype=np.float64).reshape(-1, 4)
+    if len(b) == 0:
+        return np.zeros((0, 4))
+    corners = np.stack([b[:, [0, 1]], b[:, [2, 1]], b[:, [2, 3]], b[:, [0, 3]]], axis=1).reshape(-1, 2)
+    u = undistort_points(corners, mtx, dist, src_size, new_size, alpha, force_same_fov).reshape(-1, 4, 2)
+    return np.column_stack([u[:, :, 0].min(axis=1), u[:, :, 1].min(axis=1),
+                            u[:, :, 0].max(axis=1), u[:, :, 1].max(axis=1)])

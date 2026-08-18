@@ -24,6 +24,8 @@ from numpy.typing import ArrayLike, NDArray
 __all__ = [
     "pixels_to_world",
     "boxes_to_world",
+    "boxes_to_world_by_frame",
+    "corners_to_extent",
     "footprint",
     "pixels_to_world_legacy",
     "MISS",
@@ -115,3 +117,63 @@ def pixels_to_world_legacy(pixel_xs: Sequence[float], pixel_ys: Sequence[float],
     ys = [int(float(y)) for y in pixel_ys]
     hits = pixel_to_world_coord(xs, ys, int(width), int(height), mesh, camera, include_misses=False)
     return np.reshape(np.asarray(hits, dtype=np.float64), (-1, 3)) if len(hits) else np.zeros((0, 3))
+
+
+def boxes_to_world_by_frame(frames: ArrayLike, boxes: ArrayLike, poses, fovy: ArrayLike,
+                            width: int, height: int, mesh,
+                            translation_corrections: Optional[ArrayLike] = None,
+                            rotation_corrections: Optional[ArrayLike] = None,
+                            legacy: bool = False) -> NDArray[np.float64]:
+    """Ground corners of many boxes taken from many frames, in one call.
+
+    Builds one camera per distinct frame (cached) and casts each box's four
+    corners. This is the shape every plugin step has - detections, tracks,
+    TRex imports all carry a frame index per row.
+
+    :param frames: ``(N,)`` pose index of each box
+    :param boxes: ``(N, 4)`` xyxy pixels in the frame's own resolution
+    :param poses: :class:`bambi.geo.poses.Poses` (DEM-local)
+    :param fovy: scalar or ``(len(poses),)`` vertical FOV, degrees
+    :param translation_corrections: ``(len(poses), 3)`` or ``None``
+    :param rotation_corrections: ``(len(poses), 3)`` radians or ``None``
+    :param legacy: reproduce the plugin's ``label_to_world_coordinates`` path -
+        pixels truncated to int; a box with any missed corner gets NaN in ALL
+        four rows (the plugin dropped it) instead of only in the missed ones
+    :return: ``(N, 4, 3)`` DEM-local corners TL, TR, BR, BL; NaN for misses.
+        Rows whose frame is out of range are NaN too.
+    """
+    from bambi.geo.camera import cameras_from_poses
+
+    fr = np.asarray(frames).astype(np.int64).ravel()
+    b = np.atleast_2d(np.asarray(boxes, dtype=np.float64))
+    if b.shape != (len(fr), 4):
+        raise ValueError(f"boxes must be ({len(fr)}, 4), got {b.shape}")
+    out = np.full((len(fr), 4, 3), MISS, dtype=np.float64)
+    n_poses = len(poses)
+    valid = (fr >= 0) & (fr < n_poses)
+    for f in np.unique(fr[valid]):
+        rows = np.flatnonzero(fr == f)
+        camera = cameras_from_poses(poses, fovy, width / height, translation_corrections, rotation_corrections,
+                                    indices=[int(f)])[0]
+        if legacy:
+            for r in rows:
+                x1, y1, x2, y2 = b[r]
+                pts = pixels_to_world_legacy([x1, x2, x2, x1], [y1, y1, y2, y2], width, height, mesh, camera)
+                if len(pts) == 4:
+                    out[r] = pts
+        else:
+            out[rows] = boxes_to_world(b[rows], camera, width, height, mesh)
+    return out
+
+
+def corners_to_extent(corners: ArrayLike) -> NDArray[np.float64]:
+    """``(N, 4, 3)`` ground corners -> ``(N, 6)`` ``[min_x min_y min_z max_x max_y max_z]``
+    (NaN rows stay NaN) - the box the pipeline's tables store."""
+    import warnings
+
+    c = np.asarray(corners, dtype=np.float64).reshape(-1, 4, 3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)          # all-NaN rows are the point
+        lo = np.nanmin(c, axis=1)
+        hi = np.nanmax(c, axis=1)
+    return np.hstack([lo, hi])
