@@ -8,8 +8,9 @@ Every notebook starts with::
     flight = get_flight("146")
 
 ``ensure_environment`` installs bambi-detection (editable when run from a
-checkout, from the pinned tag otherwise) plus an alfspy backend, and clones the
-public Dataset repository whose scripts do all the downloading. ``get_flight``
+checkout, from the pinned tag otherwise) plus alfspy with a render engine and a
+ray caster, and clones the public Dataset repository whose scripts do all the
+downloading. ``get_flight``
 fetches one flight through ``download_from_zenodo.py`` into a cache and returns
 its folder, so a re-run costs nothing.
 
@@ -24,10 +25,18 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 DATASET_REPO = "https://github.com/bambi-eco/Dataset.git"
 BAMBI_TAG = "v1.0.0"                 # bumped by the release process
-ALFS_TORCH_TAG = "v1.1.1"
+ALFS_TAG = "v3.0.0"                  # one package, three engines, two ray casters
+
+#: What ``ensure_environment`` installs unless told otherwise. ModernGL is
+#: alfspy's own default, but it needs a GL driver that a Colab runtime does not
+#: have, so the notebooks ask for torch - which needs none and is the engine the
+#: frozen results under ``rendered/`` were produced with.
+DEFAULT_ENGINE = "torch"
+DEFAULT_RAYCASTER = "embree"
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -53,11 +62,28 @@ def _have(module: str) -> bool:
         return False
 
 
-def ensure_environment(backend: str = "torch") -> None:
-    """Install bambi-detection + an alfspy backend, clone the Dataset tooling.
+def ensure_environment(engine: Optional[str] = None,
+                       raycaster: Optional[str] = None) -> None:
+    """Install bambi-detection + alfspy, clone the Dataset tooling.
 
-    :param backend: ``"torch"`` (default, needs no OpenGL) or ``"moderngl"``
+    alfspy ships no renderer of its own: the engine and the ray caster are pip
+    extras named after the values that select them, so asking for ``torch``
+    here installs ``AlfsPy[torch]`` and sets ``$ALFS_ENGINE=torch``. The two
+    halves cannot drift apart.
+
+    Precedence is alfspy's own - an explicit argument, then the environment,
+    then the default - so exporting ``ALFS_ENGINE=vulkan`` before starting the
+    kernel picks that engine without editing a cell, and a notebook that names
+    one still wins over both.
+
+    :param engine: ``"torch"`` (the default, and the one that needs no GL
+        driver), ``"moderngl"`` (needs one) or ``"vulkan"`` (headless GPU,
+        needs Python >= 3.11)
+    :param raycaster: ``"embree"`` (default, CPU) or ``"warp"`` (GPU, worth it
+        well above the ray counts these notebooks reach)
     """
+    engine = engine or os.environ.get("ALFS_ENGINE") or DEFAULT_ENGINE
+    raycaster = raycaster or os.environ.get("ALFS_RAYCASTER") or DEFAULT_RAYCASTER
     pip = [sys.executable, "-m", "pip", "install", "-q"]
 
     if not _have("bambi"):
@@ -67,12 +93,18 @@ def ensure_environment(backend: str = "torch") -> None:
             _run(pip + [f"git+https://github.com/bambi-eco/bambi_detection.git@{BAMBI_TAG}"])
 
     if not _have("alfspy"):
-        if backend == "torch":
+        if engine == "torch":
+            # The CPU wheel: the default PyPI build drags in multi-GB CUDA
+            # libraries these notebooks have no use for.
             _run(pip + ["torch", "torchvision", "--index-url",
                         "https://download.pytorch.org/whl/cpu"])
-            _run(pip + [f"git+https://github.com/bambi-eco/alfs_pytorch.git@{ALFS_TORCH_TAG}"])
-        else:
-            _run(pip + ["git+https://github.com/bambi-eco/alfs_py.git@v2.1.0", "moderngl"])
+        _run(pip + [f"AlfsPy[{engine},{raycaster}] @ "
+                    f"git+https://github.com/bambi-eco/alfs_py.git@{ALFS_TAG}"])
+
+    # Read on every context and every ray cast, so setting them here covers the
+    # whole notebook without any cell naming an engine.
+    os.environ["ALFS_ENGINE"] = engine
+    os.environ["ALFS_RAYCASTER"] = raycaster
 
     if not DATASET_DIR.exists():
         _run(["git", "clone", "--depth", "1", DATASET_REPO, str(DATASET_DIR)])
@@ -81,6 +113,7 @@ def ensure_environment(backend: str = "torch") -> None:
             _run(pip + [extra])
 
     print(f"\nbambi-detection ready. data dir: {DATA_DIR}")
+    print(f"render engine: {engine}   ray caster: {raycaster}")
 
 
 def get_flight(flight_id: str, version: str = "base") -> Path:

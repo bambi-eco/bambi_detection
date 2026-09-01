@@ -17,18 +17,23 @@ concurrency:
 jobs:
   # ------------------------------------------------------------------ unit
   unit:
-    name: unit (py${{ matrix.python }}, ${{ matrix.backend }})
+    name: unit (py${{ matrix.python }}, ${{ matrix.engine }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python: ["3.9", "3.12"]
-        backend: [torch]
+        engine: [torch]
         include:
-          # One ModernGL leg proves the backend-neutral seam both ways. It
-          # needs a software GL stack, so it runs headless under Xvfb.
+          # One leg per engine, because the seam is only proven by using it:
+          # with all three factories present in one package, a wrapper that
+          # silently pins one still passes a torch-only matrix.
+          # ModernGL needs a software GL stack, so it runs headless under Xvfb.
           - python: "3.11"
-            backend: moderngl
+            engine: moderngl
+          # Vulkan is the headless GPU path and needs Python >= 3.11.
+          - python: "3.11"
+            engine: vulkan
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,24 +44,27 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg
-          if [ "${{ matrix.backend }}" = "moderngl" ]; then
+          if [ "${{ matrix.engine }}" = "moderngl" ]; then
             sudo apt-get install -y --no-install-recommends xvfb libegl1 libgles2 mesa-utils
+          fi
+          if [ "${{ matrix.engine }}" = "vulkan" ]; then
+            sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
           fi
       - name: Install package + test deps
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -e . pytest pytest-cov
-      - name: Install alfspy backend (${{ matrix.backend }})
+      - name: Install alfspy with the ${{ matrix.engine }} engine
+        # One package since 3.0; the engine is an extra named after the value
+        # that selects it, so the install and $ALFS_ENGINE cannot disagree.
         run: |
-          if [ "${{ matrix.backend }}" = "torch" ]; then
-            pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"
-          else
-            pip install "git+https://github.com/bambi-eco/alfs_py.git@v2.1.0" moderngl
-          fi
+          pip install "AlfsPy[${{ matrix.engine }},embree] @ git+https://github.com/bambi-eco/alfs_py.git@v3.0.0"
       - name: Unit tests
+        env:
+          ALFS_ENGINE: ${{ matrix.engine }}
         run: |
-          if [ "${{ matrix.backend }}" = "moderngl" ]; then
+          if [ "${{ matrix.engine }}" = "moderngl" ]; then
             xvfb-run -a pytest -m "not slow and not notebook" --cov=bambi --cov-report=term-missing
           else
             pytest -m "not slow and not notebook" --cov=bambi --cov-report=term-missing
@@ -83,7 +91,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -e . pytest nbclient nbformat ipykernel matplotlib
-          pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"
+          pip install "AlfsPy[torch,embree] @ git+https://github.com/bambi-eco/alfs_py.git@v3.0.0"
       - name: Restore cached public flight
         id: flight-cache
         uses: actions/cache@v4
@@ -94,4 +102,6 @@ jobs:
       - name: Slow tier + notebooks
         env:
           BAMBI_TEST_DATA: ${{ github.workspace }}/.test-data
+          ALFS_ENGINE: torch
+          ALFS_RAYCASTER: embree
         run: pytest -m "slow or notebook" -ra

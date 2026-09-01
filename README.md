@@ -24,10 +24,10 @@ Based on this technology, an AI-powered system can detect and automatically clas
 | `bambi.geo` | poses and DEM-local frames, camera calibration checks and undistortion, poses -> alfspy cameras, pixels -> ground on the DEM, elevation grids -> meshes |
 | `bambi.tracking` | the built-in IoU/Hungarian tracker with gap interpolation; cross-modal thermal/RGB track matching |
 | `bambi.survey` | transects and flight-route geometry, perpendicular distances, KDE density and coverage grids, line-transect distance sampling, naive / bootstrap / ZINB population estimation |
-| `bambi.render` | orthophotos, light-field (ALFS) integrals, tiling, mask polygons and their footprints - through either alfspy backend |
+| `bambi.render` | orthophotos, light-field (ALFS) integrals, tiling, mask polygons and their footprints - on any alfspy engine |
 | `bambi.io` | the pipeline's file formats: poses, calibrations, corrections, DEMs, detection/track tables, TRex tracklets, survey files, rasters and GeoTIFFs |
 | `bambi.testing` | synthetic terrain + markers + poses at any tilt, for exact-truth tests |
-| `bambi.util.render_context` | backend-neutral alfspy contexts (ModernGL or PyTorch build) |
+| `bambi.util.render_context` | engine-neutral alfspy contexts and ray casters (ModernGL, PyTorch or Vulkan) |
 | `bambi.ai`, `bambi.airdata`, `bambi.srt`, `bambi.video`, `bambi.webgl`, ... | detection models and annotation formats, DJI logs, video access, frame/pose extraction (the 0.x modules, unchanged) |
 
 Every capability is shown on the public dataset in `notebooks/` and, where the plugin has an output for it, asserted equal to the plugin's in `tests/test_parity_*.py`.
@@ -37,19 +37,38 @@ Every capability is shown on the public dataset in `notebooks/` and, where the p
 ### Prerequisites
 
 - Python 3.9 - 3.12
-- one alfspy rendering backend (see below); a CUDA GPU is optional and used automatically by the PyTorch backend
+- alfspy with one render engine and one ray caster (see below); a CUDA GPU is optional, and used automatically by the PyTorch engine
 
 ### Installation
 
 ```bash
 pip install "git+https://github.com/bambi-eco/bambi_detection.git@v1.0.0"
 
-# and ONE alfspy backend - both install the same `alfspy` package, so pick one:
-pip install "git+https://github.com/bambi-eco/alfs_pytorch.git@v1.1.1"   # PyTorch, no OpenGL needed
-pip install "git+https://github.com/bambi-eco/alfs_py.git@v2.1.0"        # ModernGL
+# and alfspy with an engine and a ray caster - it ships neither by default:
+pip install "AlfsPy[torch,embree] @ git+https://github.com/bambi-eco/alfs_py.git@v3.0.0"
 ```
 
-Nothing in `bambi` names a backend: render contexts come from `bambi.util.render_context`, which uses whichever build is installed (and, on the PyTorch build, selects CUDA when it is available). Results of the two agree to well under one 8-bit level.
+alfspy 3.0 carries three interchangeable render engines and two ray casters in one package. Each is an optional extra named after the value that selects it, so what you install and what you select cannot disagree:
+
+| Engine | Extra | Needs |
+|--------|-------|-------|
+| ModernGL | `AlfsPy[moderngl]` | a working OpenGL driver |
+| PyTorch | `AlfsPy[torch]` | no GL driver; uses CUDA when present |
+| Vulkan | `AlfsPy[vulkan]` | no GL driver and no display; Python >= 3.11 |
+
+| Ray caster | Extra | When |
+|------------|-------|------|
+| Embree (CPU) | `AlfsPy[embree]` | the default, and enough for the ray counts here |
+| Warp (GPU) | `AlfsPy[warp]` | bulk casting, well above what this package does per frame |
+
+Pick them at run time with `$ALFS_ENGINE` and `$ALFS_RAYCASTER` (or `$ALFS_DEVICE` for `cuda` / `cpu`):
+
+```bash
+export ALFS_ENGINE=vulkan
+export ALFS_RAYCASTER=embree
+```
+
+Nothing in `bambi` names an engine: contexts come from `bambi.util.render_context`, which asks alfspy to resolve the choice, so switching engines needs no code change. The three agree closely - Vulkan reproduces ModernGL essentially bit for bit, PyTorch to well under one 8-bit level on average.
 
 ### Command-line tools
 
@@ -102,7 +121,7 @@ pytest                          # fast unit tier, a few seconds, no data
 pytest -m "slow or notebook"    # downloads a public flight once into .test-data/ (or $BAMBI_TEST_DATA)
 ```
 
-`tests/test_architecture.py` states the rules the layer split depends on and checks them structurally on every commit: every module imports silently, nothing imports QGIS or a rendering backend directly, and - on the modules written to it - the numpy contract holds (array in / array out on public functions, no paths, no record dicts).
+`tests/test_architecture.py` states the rules the layer split depends on and checks them structurally on every commit: every module imports silently, nothing imports QGIS or names a render engine directly, and - on the modules written to it - the numpy contract holds (array in / array out on public functions, no paths, no record dicts).
 
 CI runs the unit tier on Python 3.9 and 3.12 against the PyTorch backend and once on 3.11 against ModernGL under Xvfb; the slow tier and notebooks run nightly, on tags and on demand.
 
