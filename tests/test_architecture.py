@@ -9,8 +9,9 @@ any data or heavy dependency being present.
    no ``sys.exit`` at import time. This is what Phase 0 restored and what a
    library must never lose again.
 2. **No QGIS anywhere.** The engine is the layer *below* the QGIS plugin.
-3. **No backend-specific rendering imports.** ModernGL / torch are alfspy's
-   business; the engine goes through ``bambi.util.render_context``.
+3. **No backend-specific rendering imports.** Which of alfspy's three engines
+   renders is the caller's choice, made with ``$ALFS_ENGINE``; every context
+   goes through ``bambi.util.render_context`` so no module can pin one.
 4. **The numpy contract** on the public surface of engine modules: no file
    paths, no record dicts, no ``open()``; array-shaped results are arrays.
    Enforced on an allowlist that grows as Phase 1 lands each capability
@@ -147,12 +148,23 @@ def test_no_forbidden_imports(path):
     assert not bad, f"{path.relative_to(SRC)} imports {bad}"
 
 
-def test_render_contexts_come_from_the_neutral_helper():
-    """``make_mgl_context`` exists only on the ModernGL build of alfspy."""
+#: Ways of getting a render context that pin an engine, or could. Since alfspy
+#: 3.0 one package carries all three, so naming any factory outside the neutral
+#: helper is how the choice quietly leaves the caller's hands - which is exactly
+#: what happened when the helper itself still sniffed for ``make_torch_context``
+#: and answered "torch" on every machine.
+_CONTEXT_FACTORIES = ("make_context", "make_mgl_context", "make_torch_context",
+                      "create_context")
+
+
+@pytest.mark.parametrize("factory", _CONTEXT_FACTORIES)
+def test_render_contexts_come_from_the_neutral_helper(factory):
     offenders = [str(p.relative_to(SRC)) for p in _py_files()
                  if p.name != "render_context.py"
-                 and "make_mgl_context" in p.read_text(encoding="utf-8")]
-    assert not offenders, f"{offenders} call make_mgl_context(); use bambi.util.render_context"
+                 and factory in p.read_text(encoding="utf-8")]
+    assert not offenders, (
+        f"{offenders} call {factory}(); use bambi.util.render_context so the "
+        "engine stays the caller's choice")
 
 
 # ---------------------------------------------------------------------------
