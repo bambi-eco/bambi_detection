@@ -47,14 +47,19 @@ def pixels_to_world(pixels: ArrayLike, camera, width: int, height: int, mesh) ->
     """
     from alfspy.core.convert.convert import pixel_to_world_coord
 
+    from bambi.util.render_context import ray_caster_for
+
     px = np.atleast_2d(np.asarray(pixels, dtype=np.float64))
     if px.shape[1] != 2:
         raise ValueError(f"pixels must be (N, 2) [x, y], got {px.shape}")
     out = np.full((len(px), 3), MISS, dtype=np.float64)
     if len(px) == 0:
         return out
+    # A built caster rather than the bare mesh: alfspy 3.0 builds the
+    # acceleration structure inside every call it is handed a mesh, and every
+    # caller here casts the same DEM once per frame.
     hits = pixel_to_world_coord(px[:, 0].tolist(), px[:, 1].tolist(), int(width), int(height),
-                                mesh, camera, include_misses=True)
+                                ray_caster_for(mesh), camera, include_misses=True)
     for i, h in enumerate(hits):
         if h is not None:
             out[i] = np.asarray(h, dtype=np.float64)[:3]
@@ -113,9 +118,12 @@ def pixels_to_world_legacy(pixel_xs: Sequence[float], pixel_ys: Sequence[float],
     """
     from alfspy.core.convert.convert import pixel_to_world_coord
 
+    from bambi.util.render_context import ray_caster_for
+
     xs = [int(float(x)) for x in pixel_xs]
     ys = [int(float(y)) for y in pixel_ys]
-    hits = pixel_to_world_coord(xs, ys, int(width), int(height), mesh, camera, include_misses=False)
+    hits = pixel_to_world_coord(xs, ys, int(width), int(height), ray_caster_for(mesh), camera,
+                                include_misses=False)
     return np.reshape(np.asarray(hits, dtype=np.float64), (-1, 3)) if len(hits) else np.zeros((0, 3))
 
 
@@ -150,6 +158,9 @@ def boxes_to_world_by_frame(frames: ArrayLike, boxes: ArrayLike, poses, fovy: Ar
         raise ValueError(f"boxes must be ({len(fr)}, 4), got {b.shape}")
     out = np.full((len(fr), 4, 3), MISS, dtype=np.float64)
     n_poses = len(poses)
+    # Built once for the whole batch: the loop below runs per distinct frame.
+    from bambi.util.render_context import ray_caster_for
+    caster = ray_caster_for(mesh)
     valid = (fr >= 0) & (fr < n_poses)
     for f in np.unique(fr[valid]):
         rows = np.flatnonzero(fr == f)
@@ -158,11 +169,12 @@ def boxes_to_world_by_frame(frames: ArrayLike, boxes: ArrayLike, poses, fovy: Ar
         if legacy:
             for r in rows:
                 x1, y1, x2, y2 = b[r]
-                pts = pixels_to_world_legacy([x1, x2, x2, x1], [y1, y1, y2, y2], width, height, mesh, camera)
+                pts = pixels_to_world_legacy([x1, x2, x2, x1], [y1, y1, y2, y2], width, height,
+                                             caster, camera)
                 if len(pts) == 4:
                     out[r] = pts
         else:
-            out[rows] = boxes_to_world(b[rows], camera, width, height, mesh)
+            out[rows] = boxes_to_world(b[rows], camera, width, height, caster)
     return out
 
 

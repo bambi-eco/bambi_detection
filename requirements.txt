@@ -1,7 +1,8 @@
-# AlfsPy>=2.1.0 # external https://github.com/bambi-eco/alfs_py!!!!
-# Either alfspy backend works (alfs_py / ModernGL or alfs_pytorch / PyTorch);
-# see bambi/util/render_context.py.  2.1.0 is the first release providing
-# quaternion_from_drone_pose, which this package now uses for pose rotations.
+# AlfsPy>=3.0.0 # external https://github.com/bambi-eco/alfs_py!!!!
+# Install it with an engine and a ray caster, both of which are extras named
+# after the values that select them - AlfsPy[torch,embree], AlfsPy[moderngl],
+# AlfsPy[vulkan,warp]. Any engine works; see bambi/util/render_context.py.
+# 3.0.0 merged the former alfs_pytorch fork back in, so AlfsTorch is gone.
 ultralytics==8.3.75
 torch==2.5.1
 torchvision==0.20.1
@@ -19,7 +20,11 @@ rasterio>=1.2.10
 moviepy==1.0.3
 pandas>=2.0.3
 gltflib==1.0.13
-trimesh==3.21.7
+# >=4.0 because alfspy 3.0 requires it, and because trimesh 3.x looks for the
+# long-obsolete `pyembree` module and so silently falls back to a pure-Python
+# ray intersector that returns hits in a DIFFERENT INDEX ORDER - a correctness
+# difference under bambi.geo.georef, not merely a slow path.
+trimesh>=4.0,<6
 rtree>=1.0            # trimesh's ray caster (bambi.geo.georef) needs the r-tree soft dependency
 pyrr==0.10.3
 shapely==2.0.7
