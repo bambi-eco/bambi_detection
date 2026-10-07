@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.1 - 2026-10-07
 
 ### Fixed
 - **The render engine is the caller's choice again.** alfspy 3.0 merged the
@@ -24,6 +24,18 @@
   silently falls back to a pure-Python ray intersector that returns hits in a
   **different index order** - a correctness difference under `bambi.geo.georef`,
   not merely a slow path.
+- **`label_to_world_coordinates` uses the cached ray caster too.** It was the
+  one helper outside `bambi.geo.georef` still handing alfspy the bare mesh, and
+  it is what the QGIS plugin projects detections, tracks and FoV footprints
+  through: about 0.25 s and 55 MB per call on a 265k-triangle DEM. A FoV run
+  (one call per mask vertex per frame) looked hung, and a 5000-detection
+  georeference climbed past 45 GB.
+- **OpenCV undistortion no longer dies with a bare `Unknown exception`.**
+  `bambi.geo.calibration.undistort_maps` / `remap` wrap
+  `initUndistortRectifyMap` / `remap`: when OpenCV's parallel backend (the
+  Concurrency Runtime on Windows) fails inside a host process such as QGIS, the
+  call is retried single-threaded, and a remaining failure reports its inputs
+  and the OpenCV build. The video and photo extractors use them.
 
 ### Changed
 - `notebooks/_setup.py` installs `AlfsPy[<engine>,<raycaster>] @ v3.0.0` instead

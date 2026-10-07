@@ -5,4 +5,4 @@ try:
 
     __version__ = _dist_version("bambi-detection")
 except Exception:  # pragma: no cover - not installed as a distribution
-    __version__ = "1.0.0"
+    __version__ = "1.0.1"
