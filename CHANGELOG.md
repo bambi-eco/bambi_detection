@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2 - 2026-10-07
+
+### Fixed
+- **torch is a range, not a pin.** `torch==2.5.1` / `torchvision==0.20.1`
+  became `torch>=2.6.0,<=2.11.0` / `torchvision>=0.21.0,<=0.26.0`. The QGIS
+  plugin installs this package with its dependencies, so the exact pin swapped
+  the plugin's CUDA build for the CPU 2.5.1 wheel on every install. 2.6 is the
+  floor because transformers 5.x calls `torch.accelerator` on import (while
+  still declaring `torch>=2.5`), which broke the plugin's DINOv3 classification.
+  The suite passes unchanged on torch 2.11.0.
+
 ## 1.0.1 - 2026-10-07
 
 ### Fixed
