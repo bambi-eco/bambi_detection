@@ -52,6 +52,17 @@ def tile_image(img, tile_size):
     return result
 
 def label_to_world_coordinates(label_coordinates, input_resolution, tri_mesh, camera):
+    """Cast the label's pixels onto the mesh; misses are dropped.
+
+    The mesh goes through :func:`bambi.util.render_context.ray_caster_for`, so
+    the ray-casting structure is built once per mesh and reused. Handing the
+    bare mesh to alfspy 3.0 builds a fresh structure on every call: a quarter
+    of a second and about 55 MB per call on a 265k-triangle DEM, freed only by
+    the cyclic garbage collector - which is how a 5000-detection run climbed
+    past 45 GB in the QGIS plugin.
+    """
+    from bambi.util.render_context import ray_caster_for
+
     pixel_xs = []
     pixel_ys = []
     for pixel_id, pixel in enumerate(label_coordinates):
@@ -60,8 +71,8 @@ def label_to_world_coordinates(label_coordinates, input_resolution, tri_mesh, ca
         else:
             pixel_ys.append(int(float(pixel)))
 
-    w_poses = pixel_to_world_coord(pixel_xs, pixel_ys, input_resolution.width, input_resolution.height, tri_mesh, camera,
-                                   include_misses=False)
+    w_poses = pixel_to_world_coord(pixel_xs, pixel_ys, input_resolution.width, input_resolution.height,
+                                   ray_caster_for(tri_mesh), camera, include_misses=False)
     return w_poses
 
 def get_sorted_mask_contour_pixels(mask_image):
