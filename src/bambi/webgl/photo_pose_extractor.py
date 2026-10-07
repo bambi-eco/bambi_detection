@@ -18,6 +18,7 @@ from dateutil import tz
 
 from bambi.airdata.air_data_parser import AirDataParser
 from bambi.airdata.air_data_frame import AirDataFrame
+from bambi.geo.calibration import remap, undistort_maps
 from bambi.thermal.thermal_colorizer import ThermalColorizer
 
 # DJI filename pattern: DJI_YYYYMMDDHHMMSS_NNNN_X.JPG (or .jpg)
@@ -287,13 +288,11 @@ class PhotoUndistorter:
             self._new_camera_matrix = new_cameramtx
 
         # Build remap LUTs
-        self._mapx, self._mapy = cv2.initUndistortRectifyMap(
+        self._mapx, self._mapy = undistort_maps(
             self._mtx,
             self._dist,
-            None,
             self._new_camera_matrix,
             self._new_size,
-            cv2.CV_32FC1,
         )
         self._is_initialized = True
 
@@ -311,7 +310,7 @@ class PhotoUndistorter:
             h, w = img.shape[:2]
             self.prepare((w, h))
 
-        return cv2.remap(img, self._mapx, self._mapy, cv2.INTER_LINEAR)
+        return remap(img, self._mapx, self._mapy, cv2.INTER_LINEAR)
 
     def create_distortion_mask(
         self, width: int, height: int

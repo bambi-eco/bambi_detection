@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from bambi.geo.calibration import remap, undistort_maps
 from bambi.video.video_domain import UndistortionParameters, VideoInput
 from bambi.video.video_frame_accessor import (
     MultiVideoFrameAccessor,
@@ -147,13 +148,11 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
             # print("WARNING: No new camera matrix defined, using default!")
 
         # prepare undistortion maps to undistort images
-        mapx, mapy = cv2.initUndistortRectifyMap(
+        mapx, mapy = undistort_maps(
             mtx,
             dist,
-            None,
             self.undistortion_parameters.new_camera_matrix,
             self.undistortion_parameters.new_size,
-            5,
         )
 
         # store
@@ -174,7 +173,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
             self.prepare_undistort((w, h))
 
         # undistort image
-        dst = cv2.remap(
+        dst = remap(
             img,
             self.undistortion_parameters.mapx,
             self.undistortion_parameters.mapy,

@@ -20,14 +20,17 @@ calibration JSON and probing a video's resolution are edge concerns
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Any, Callable, Tuple, TypeVar
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
     "new_camera_matrix",
+    "undistort_maps",
+    "remap",
     "undistort_points",
     "undistort_boxes",
     "CalibrationCheck",
@@ -37,6 +40,9 @@ __all__ = [
     "WARN_TOLERANCE",
     "FATAL_TOLERANCE",
 ]
+
+_log = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 #: Relative size difference above which a mismatch is merely reported.
 WARN_TOLERANCE = 0.10
@@ -143,6 +149,96 @@ def new_camera_matrix(mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int]
         f = max(new_mtx[0, 0], new_mtx[1, 1])
         new_mtx[0, 0] = new_mtx[1, 1] = f
     return new_mtx
+
+
+def _opencv_backend_note() -> str:
+    import cv2
+
+    try:
+        parallel = next((line.strip() for line in cv2.getBuildInformation().splitlines()
+                         if "Parallel framework" in line), "Parallel framework: ?")
+    except Exception:  # pragma: no cover - build info is best effort
+        parallel = "Parallel framework: ?"
+    return f"OpenCV {cv2.__version__} from {getattr(cv2, '__file__', '?')} ({parallel})"
+
+
+def _with_serial_fallback(op: Callable[[], _T], what: str, details: str) -> _T:
+    """Run an OpenCV call; if it throws, retry once with OpenCV's parallel
+    backend disabled and, failing that, raise an error that says what was
+    passed in.
+
+    On Windows the opencv-python wheels dispatch ``parallel_for_`` through
+    the Microsoft Concurrency Runtime. When that runtime cannot set up its
+    scheduler inside a host process (seen in QGIS after heavy in-process
+    rendering) every parallel OpenCV call fails with the runtime's default
+    exception text, which surfaces in Python as the bare and useless
+    ``cv2.error: Unknown exception``. ``cv2.setNumThreads(1)`` makes OpenCV
+    run its loops inline, without touching that runtime at all, so the retry
+    both diagnoses and works around the condition. The reduced parallelism
+    is process-wide and is logged.
+    """
+    import cv2
+
+    try:
+        return op()
+    except cv2.error as first:
+        first_msg = str(first)
+    try:
+        cv2.setNumThreads(1)
+        result = op()
+    except cv2.error as second:
+        raise RuntimeError(
+            f"OpenCV failed in {what} and again after disabling its parallel "
+            "backend.\n" + details + "\n" + _opencv_backend_note() + "\n"
+            f"first error: {first_msg}\nsingle-threaded retry: {second}"
+        ) from second
+    _log.warning(
+        "OpenCV failed in %s (%s) but succeeded single-threaded; OpenCV "
+        "parallelism has been disabled for the rest of this process. %s",
+        what, first_msg, _opencv_backend_note())
+    return result
+
+
+def undistort_maps(mtx: ArrayLike, dist: ArrayLike, new_camera_matrix: ArrayLike,
+                   new_size: Tuple[int, int]) -> Tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """The ``cv2.remap`` look-up tables that turn a raw frame into an
+    undistorted ``new_size`` frame with ``new_camera_matrix`` intrinsics.
+
+    ``initUndistortRectifyMap`` with no rectification and ``CV_32FC1`` maps -
+    exactly what the video and photo extractors build on their first frame -
+    wrapped so that a failure of OpenCV's parallel backend is retried
+    single-threaded and any remaining failure reports its inputs instead of
+    ``Unknown exception``.
+
+    :param mtx: 3x3 intrinsic matrix of the raw camera
+    :param dist: distortion coefficients (4, 5, 8, 12 or 14)
+    :param new_camera_matrix: intrinsics of the undistorted frame
+    :param new_size: ``(width, height)`` of the undistorted frame
+    :return: ``(mapx, mapy)`` float32 arrays of shape ``(height, width)``
+    """
+    import cv2
+
+    m = _matrix(mtx)
+    d = np.asarray(dist, dtype=np.float64).reshape(1, -1)
+    ncm = _matrix(new_camera_matrix)
+    size = tuple(int(v) for v in new_size)
+    details = (f"new_size={size}, mtx={m.tolist()}, dist={d.ravel().tolist()}, "
+               f"new_camera_matrix={ncm.tolist()}")
+    return _with_serial_fallback(
+        lambda: cv2.initUndistortRectifyMap(m, d, None, ncm, size, cv2.CV_32FC1),
+        "initUndistortRectifyMap", details)
+
+
+def remap(img: NDArray[Any], mapx: NDArray[np.float32], mapy: NDArray[np.float32],
+          interpolation: int = 1) -> NDArray[Any]:
+    """``cv2.remap`` with the same single-threaded retry as :func:`undistort_maps`.
+
+    :param interpolation: OpenCV interpolation flag (default ``INTER_LINEAR``)
+    """
+    import cv2
+
+    details = f"image shape={tuple(img.shape)} dtype={img.dtype}, map shape={tuple(mapx.shape)}"
+    return _with_serial_fallback(lambda: cv2.remap(img, mapx, mapy, interpolation), "remap", details)
 
 
 def fovy_after_undistortion(mtx: ArrayLike, dist: ArrayLike, src_size: Tuple[int, int],
