@@ -2,6 +2,7 @@ import bisect
 import datetime
 import json
 import os.path
+import warnings
 from collections import defaultdict
 from datetime import tzinfo
 from itertools import islice
@@ -34,6 +35,13 @@ from bambi.video.video_frame_accessor import VideoFrameAccessor
 TIMEZONE_VIENNA: Final[tzinfo] = tz.gettz('Europe/Vienna')
 TIMEZONE_UTC: Final[tzinfo] = tz.tzutc()
 AIR_DATA_MAX_FRAME_OFFSET: Final[int] = 2000  # milliseconds between frames
+# Where the camera yaw of each pose comes from. The AirData sources are
+# interpolated from the flight log (5-10 Hz); the SRT sources are read from the
+# subtitle line of the frame itself. Not every DJI model writes a drone yaw to
+# the SRT (M30T/M3T write only the gimbal angles).
+HEADING_SOURCES: Final[Tuple[str, ...]] = ("airdata_compass", "airdata_gimbal", "srt_gimbal", "srt_drone")
+# Compass spread (deg) beyond the gimbal spread that triggers the heading warning.
+HEADING_WOBBLE_WARN_DEG: Final[float] = 2.0
 ORTHOMETRIC_TRANSFORMER = Transformer.from_crs(CRS("EPSG:4326").to_3d(), CRS("EPSG:4979").to_3d(),always_xy=True)  # WGS84 + EGM96 geoid height
 # from geographiclib import Geoid
 
@@ -54,6 +62,7 @@ class TimedFrameExtractorCallback:
     overwrite_existing: bool = False
     selected_indices: Optional[set] = None  # None means all indices are processed
     no_images: bool = False
+    image_srt_frames: Optional[List[SrtFrame]] = None  # if set, receives the SRT frame of every image
 
     def __call__(self, idx: int, img: npt.NDArray[Any]) -> bool:
 
@@ -75,6 +84,8 @@ class TimedFrameExtractorCallback:
 
         self.image_files.append(filename)
         self.image_timestamps.append(timestamp)
+        if self.image_srt_frames is not None:
+            self.image_srt_frames.append(frame)
 
         return True
 
@@ -90,20 +101,29 @@ class TimedPoseExtractor:
         rel_transformer: Transformer = Transformer.from_crs(CRS.from_epsg(4326), CRS.from_epsg(32633)),
         drone_name: Drone = Drone.M30T,
         camera_name: Camera = Camera.Thermal,
-        use_gimbal_heading: bool = False,
+        heading_source: str = "airdata_compass",
+        airdata_video_padding_ms: int = 0,
     ):
         """
         :param calibrated_frame_accessor: Object used to access the individual, normalized video frames
         :param rel_transformer: Used to calculate the relative position between from the reference point per frame
         :param drone_name: Drone used to create video
         :param camera_name: Camera used to create video
-        :param use_gimbal_heading: When True, use frame.gimbal_heading instead of frame.compass_heading for the yaw rotation
+        :param heading_source: One of HEADING_SOURCES; selects the yaw of every pose.
+        :param airdata_video_padding_ms: Flight log time kept before the first and after the last isVideo
+            row. DJI can set the isVideo flag ~1 s after recording started, which leaves the first frames
+            outside the log slice (extrapolated). 0 keeps the historic behaviour; 3000 is recommended.
         """
+        if heading_source not in HEADING_SOURCES:
+            raise ValueError(f"Unknown heading source {heading_source!r}, expected one of {HEADING_SOURCES}")
+        if airdata_video_padding_ms < 0:
+            raise ValueError("airdata_video_padding_ms must not be negative")
         self.frame_accessor = calibrated_frame_accessor
         self.rel_transformer = rel_transformer
         self.drone_name = drone_name
         self.camera_name = camera_name
-        self.use_gimbal_heading = use_gimbal_heading
+        self.heading_source = heading_source
+        self.airdata_video_padding_ms = int(airdata_video_padding_ms)
 
 
     @staticmethod
@@ -142,12 +162,14 @@ class TimedPoseExtractor:
 
     @staticmethod
     def get_air_data_frames(air_data_file: str, video_timestamp: datetime.datetime,
-                            timezone: tzinfo = TIMEZONE_VIENNA) -> Tuple[AirDataFrame, Sequence[AirDataFrame]]:
+                            timezone: tzinfo = TIMEZONE_VIENNA,
+                            padding_ms: int = 0) -> Tuple[AirDataFrame, Sequence[AirDataFrame]]:
         """
         Loads all  AirData frames from an AirData CSV file and crops them to their video frames.
         :param air_data_file: The AirData CSV file to load.
         :param video_timestamp: The timestamp of the video creation.
         :param timezone: The timezone to assign to the frame timestamps.
+        :param padding_ms: Log time kept before the first and after the last isVideo frame (stops at the log edges).
         :return: A sequence of AirData frames representing the video frames.
         """
         ad_parser = AirDataParser()
@@ -180,7 +202,66 @@ class TimedPoseExtractor:
         if last_idx == first_idx:
             raise ValueError(f"AirData logs do not form a valid video frame range [{first_idx}, {last_idx}]")
 
+        # Widen by time, not by the isVideo flag: the flag can lag the recording.
+        if padding_ms > 0:
+            lo = ad_frames[first_idx].time - padding_ms
+            hi = ad_frames[last_idx].time + padding_ms
+            while first_idx > 0 and ad_frames[first_idx - 1] is not None and ad_frames[first_idx - 1].time >= lo:
+                first_idx -= 1
+            while (last_idx < len(ad_frames) - 1 and ad_frames[last_idx + 1] is not None
+                   and ad_frames[last_idx + 1].time <= hi):
+                last_idx += 1
+
         return start_frame, ad_frames[first_idx: last_idx + 1]
+
+    @staticmethod
+    def heading_check(frames: Sequence[AirDataFrame]) -> dict:
+        """Compare how much compass and gimbal heading move over the video.
+
+        A gimbal that holds its heading while the body yaws (fast, agile flight)
+        makes the compass heading wrong for the camera: each frame is then
+        rotated by the body's yaw wobble.
+        """
+        def spread(values):
+            vals = [v for v in values if v is not None]
+            if len(vals) < 2:
+                return 0.0
+            unwrapped = np.unwrap(np.radians(vals))
+            return float(np.degrees(np.std(unwrapped)))
+
+        compass = spread([f.compass_heading for f in frames])
+        gimbal = spread([f.gimbal_heading for f in frames])
+        prefer_gimbal = compass - gimbal > HEADING_WOBBLE_WARN_DEG
+        return {
+            "compass_heading_std_deg": round(compass, 2),
+            "gimbal_heading_std_deg": round(gimbal, 2),
+            "prefer_gimbal_heading": prefer_gimbal,
+            "recommended_heading_source": "airdata_gimbal" if prefer_gimbal else None,
+        }
+
+    @staticmethod
+    def _fill_missing_headings(frames: Sequence[AirDataFrame]) -> int:
+        """Interpolate headings that SRT-converted frames could not provide.
+
+        Most SRTs carry no drone yaw, so a frame converted from the SRT has
+        compass_heading None, which the interpolator would read as 0 (north).
+        Fill those from the neighbouring frames that have a value (by time,
+        angle-unwrapped). Returns the number of values filled.
+        """
+        filled = 0
+        times = np.array([f.time for f in frames], dtype=float)
+        for prop in ("compass_heading", "gimbal_heading"):
+            values = [getattr(f, prop, None) for f in frames]
+            known = [i for i, v in enumerate(values) if v is not None]
+            missing = [i for i, v in enumerate(values) if v is None]
+            if not missing or not known:
+                continue
+            known_values = np.degrees(np.unwrap(np.radians([float(values[i]) for i in known])))
+            interp = np.interp(times[missing], times[known], known_values)
+            for i, v in zip(missing, interp):
+                setattr(frames[i], prop, float(v % 360.0))
+                filled += 1
+        return filled
 
     @staticmethod
     def _interpolate_nan(arr: npt.NDArray) -> npt.NDArray:
@@ -283,10 +364,12 @@ class TimedPoseExtractor:
         conv_frame.xSpeed = srt_frame.drone_speedx
         conv_frame.ySpeed = srt_frame.drone_speedy
         conv_frame.zSpeed = srt_frame.drone_speedz
-        conv_frame.compass_heading = srt_frame.drone_yaw
+        # SRT yaws are -180..180, AirData headings 0..360; None stays None and is
+        # filled from the neighbouring AirData rows (_fill_missing_headings).
+        conv_frame.compass_heading = srt_frame.drone_yaw % 360 if srt_frame.drone_yaw is not None else None
         conv_frame.pitch = srt_frame.drone_pitch
         conv_frame.roll = srt_frame.drone_roll
-        conv_frame.gimbal_heading = srt_frame.gb_yaw
+        conv_frame.gimbal_heading = srt_frame.gb_yaw % 360 if srt_frame.gb_yaw is not None else None
         conv_frame.gimbal_pitch = srt_frame.gb_pitch
         conv_frame.gimbal_roll = srt_frame.gb_roll
 
@@ -384,8 +467,34 @@ class TimedPoseExtractor:
 
                 srt_conv_ranges.append((prev_ad_frame.datetime, ad_frame.datetime))
 
+        if srt_conv_ranges:
+            TimedPoseExtractor._fill_missing_headings(new_ad_frames)
 
         return srt_frames, new_ad_frames, srt_conv_ranges
+
+    def _check_srt_heading(self, srt_frames: Sequence[SrtFrame]) -> None:
+        """Fail before extracting anything when the chosen SRT heading is not in the SRT."""
+        attr = {"srt_gimbal": "gb_yaw", "srt_drone": "drone_yaw"}.get(self.heading_source)
+        if attr is None:
+            return
+        if not any(getattr(f, attr, None) is not None for f in srt_frames):
+            raise ValueError(
+                f"Heading source '{self.heading_source}' needs '{attr}' in the SRT files, but they do not "
+                f"contain it (not every DJI model writes it). Choose another heading source.")
+
+    def _heading(self, frame: AirDataFrame, srt_frame: Optional[SrtFrame]) -> Optional[float]:
+        """Yaw of one pose from the configured heading source.
+
+        SRT sources read the frame's own subtitle line; a frame without the value
+        falls back to the matching AirData heading.
+        """
+        if self.heading_source == "srt_gimbal" and srt_frame is not None and srt_frame.gb_yaw is not None:
+            return float(srt_frame.gb_yaw) % 360
+        if self.heading_source == "srt_drone" and srt_frame is not None and srt_frame.drone_yaw is not None:
+            return float(srt_frame.drone_yaw) % 360
+        if self.heading_source in ("airdata_gimbal", "srt_gimbal"):
+            return frame.gimbal_heading
+        return frame.compass_heading
 
     def _write_image_mask(self, target_folder: str, overwrite_existing: bool) -> str:
         filename = f"mask_{self.camera_name}.png"
@@ -457,10 +566,13 @@ class TimedPoseExtractor:
 
         image_files: list[str] = []
         image_timestamps: list[datetime.datetime] = []
+        image_srt_frames: list[SrtFrame] = []
 
         # match SRT/video frames with AirData frames
         srt_frames, num_videos, frame_to_video = self.get_srt_frames(srt_data_paths, timezone=timezone)
-        start_frame, ad_frames = self.get_air_data_frames(air_data_path, srt_frames[0].timestamp, timezone=timezone)
+        self._check_srt_heading(srt_frames)
+        start_frame, ad_frames = self.get_air_data_frames(air_data_path, srt_frames[0].timestamp, timezone=timezone,
+                                                          padding_ms=self.airdata_video_padding_ms)
         srt_frames, ad_frames, conv_ranges = self.adapt_srt_air_data_frames(srt_frames, ad_frames, start_frame)
 
         # Compute which global frame indices (across all videos) are selected after applying
@@ -508,6 +620,7 @@ class TimedPoseExtractor:
                 overwrite_existing=overwrite_existing,
                 selected_indices=selected_local,
                 no_images=no_images,
+                image_srt_frames=image_srt_frames,
             )
 
             self.frame_accessor.access(
@@ -543,7 +656,7 @@ class TimedPoseExtractor:
                 frame_altitude - origin_altitude,
             ]
 
-            heading = frame.gimbal_heading if self.use_gimbal_heading else frame.compass_heading
+            heading = self._heading(frame, image_srt_frames[i] if i < len(image_srt_frames) else None)
             rotation = [
                 # pitch is rotation around X axis (+90° because per default it faces forward)
                 (float(frame.gimbal_pitch) + 90) % 360 if frame.gimbal_pitch is not None else 0.0,
@@ -583,6 +696,16 @@ class TimedPoseExtractor:
 
         res = dict()
         res["images"] = images
+        res["heading_source"] = self.heading_source
+        res["airdata_video_padding_ms"] = self.airdata_video_padding_ms
+        res["heading_check"] = self.heading_check(interpolated_frames)
+        uses_compass = self.heading_source in ("airdata_compass", "srt_drone")
+        if res["heading_check"]["prefer_gimbal_heading"] and uses_compass:
+            warnings.warn(
+                "Compass heading varies {compass_heading_std_deg} deg (std) over the video but the gimbal "
+                "heading only {gimbal_heading_std_deg} deg: the camera held its heading while the drone "
+                "yawed. Use the heading source '{recommended_heading_source}', or the frames will be "
+                "rotated by the body's yaw.".format(**res["heading_check"]))
         res["origin"] = {"latitude": origin.latitude, "longitude": origin.longitude, "altitude": origin.altitude}
         res["drone"] = ("Unknown" if self.drone_name is None else Drone.product_name(self.drone_name))
         res["camera"] = ("Unknown" if self.camera_name is None else Camera.fullname(self.camera_name))

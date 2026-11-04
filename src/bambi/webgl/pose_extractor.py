@@ -2,7 +2,7 @@ import datetime
 import json
 import math
 import os.path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -12,6 +12,7 @@ import cv2
 from pyproj import CRS, Transformer
 
 from bambi.airdata.air_data_frame import AirDataFrame
+from bambi.airdata.air_data_from_srt_parser import AirDataFromSrtParser
 from bambi.airdata.air_data_parser import AirDataParser, AirDataParserInterface
 from bambi.domain.camera import Camera
 from bambi.domain.drone import Drone
@@ -19,6 +20,32 @@ from bambi.geo.gps_exif_writer import GpsExifWriter
 from bambi.video.calibrated_video_frame_accessor import (
     CalibratedVideoFrameAccessor,
 )
+
+#: Heading sources per parser. The parser reads either the flight log or the SRT,
+#: never both, so only the sources of that file are available.
+AIRDATA_HEADING_SOURCES: Tuple[str, ...] = ("airdata_compass", "airdata_gimbal")
+SRT_HEADING_SOURCES: Tuple[str, ...] = ("srt_gimbal", "srt_drone")
+#: Sources that read ``AirDataFrame.gimbal_heading`` (the others read ``compass_heading``,
+#: which holds the SRT drone yaw when the frames come from an SRT).
+_GIMBAL_HEADING_SOURCES: Tuple[str, ...] = ("airdata_gimbal", "srt_gimbal")
+
+
+def _resolve_heading_source(parser: AirDataParserInterface, heading_source: Optional[str]) -> str:
+    """Default and validate *heading_source* for the given parser."""
+    if isinstance(parser, AirDataFromSrtParser):
+        supported, default = SRT_HEADING_SOURCES, "srt_drone"
+    elif isinstance(parser, AirDataParser):
+        supported, default = AIRDATA_HEADING_SOURCES, "airdata_compass"
+    else:  # another implementation of the interface: the caller knows what it reads
+        supported, default = AIRDATA_HEADING_SOURCES + SRT_HEADING_SOURCES, "airdata_compass"
+    if heading_source is None:
+        return default
+    if heading_source not in supported:
+        raise ValueError(
+            f"Heading source {heading_source!r} is not supported with {type(parser).__name__}; "
+            f"expected one of {supported}."
+        )
+    return heading_source
 
 
 class PoseExtractor:
@@ -35,7 +62,7 @@ class PoseExtractor:
         ),
         drone_name: Optional[Drone] = None,
         camera_name: Optional[Camera] = None,
-        use_gimbal_heading: bool = False,
+        heading_source: Optional[str] = None,
     ):
         """
         :param calibrated_frame_accessor: Object used to access the individual, normalized video frames
@@ -43,14 +70,28 @@ class PoseExtractor:
         :param rel_transformer: Used to calculate the relative position between from the reference point per frame
         :param drone_name: Drone used to create video
         :param camera_name: Camera used to create video
-        :param use_gimbal_heading: When True, use frame.gimbal_heading instead of frame.compass_heading for the yaw rotation
+        :param heading_source: Where the yaw of every pose comes from. Same keyword and
+            values as :class:`TimedPoseExtractor`, limited to the file the parser reads:
+
+            - with :class:`AirDataParser` (:data:`AIRDATA_HEADING_SOURCES`):
+              ``"airdata_compass"`` (default, the drone body's compass heading) or
+              ``"airdata_gimbal"`` (the gimbal heading);
+            - with :class:`AirDataFromSrtParser` (:data:`SRT_HEADING_SOURCES`):
+              ``"srt_drone"`` (default, the SRT drone yaw) or ``"srt_gimbal"`` (the SRT
+              gimbal yaw ``gb_yaw``);
+            - with any other parser, all four.
+
+            Anything else raises ``ValueError``. ``None`` picks the parser's default,
+            which is the heading used before this parameter existed. A frame without
+            the chosen heading gets yaw 0 (many DJI SRTs have no drone yaw, so prefer
+            ``"srt_gimbal"`` with an SRT).
         """
         self.calibrated_frame_accessor = calibrated_frame_accessor
         self.parser = parser
         self.rel_transformer = rel_transformer
         self.drone_name = drone_name
         self.camera_name = camera_name
-        self.use_gimbal_heading = use_gimbal_heading
+        self.heading_source = _resolve_heading_source(parser, heading_source)
 
     def extract(
         self,
@@ -127,7 +168,7 @@ class PoseExtractor:
             reference_frame=origin,
             include_gps=include_gps,
             mask_images=mask_images,
-            use_gimbal_heading=self.use_gimbal_heading,
+            heading_source=self.heading_source,
             no_images=no_images,
         )
 
@@ -151,6 +192,7 @@ class PoseExtractor:
         )
 
         res["samplingRate"] = sampling_rate
+        res["heading_source"] = self.heading_source
 
         # store the result in a json file
         res_path = os.path.join(target_folder, "poses.json")
@@ -179,7 +221,7 @@ class PoseExtractorCallback:
     gps_writer: Optional[GpsExifWriter] = None
     include_gps: bool = False
     mask_images: bool = False
-    use_gimbal_heading: bool = False
+    heading_source: str = "airdata_compass"
     no_images: bool = False
 
     _reference_transformed: Optional[tuple[float, float]] = None
@@ -294,7 +336,7 @@ class PoseExtractorCallback:
                 float(frame.gimbal_pitch) + 90 if frame.gimbal_pitch is not None else 0.0,
                 # pitch is rotation around X axis (+90° because per default it faces forward)
                 0,  # roll (Y-axis) is always zero!
-                (heading + correction_angle) if (heading := frame.gimbal_heading if self.use_gimbal_heading else frame.compass_heading) is not None
+                (heading + correction_angle) if (heading := frame.gimbal_heading if self.heading_source in _GIMBAL_HEADING_SOURCES else frame.compass_heading) is not None
                 else 0.0,  # heading is rotation around Z (up axis)
             ],
             "fovy": self.fovy_callback(),

@@ -211,7 +211,7 @@ class AirDataParser(AirDataParserInterface):
                     break
 
         if best_frame is None:
-            raise ValueError(f"The AirData file [{file}] does not contain any frames")
+            raise ValueError("The AirData frames do not contain any video or photo frames")
 
         if min_diff > max_timedelta:
             raise ValueError(

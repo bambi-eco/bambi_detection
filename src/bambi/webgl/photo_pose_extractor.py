@@ -21,6 +21,11 @@ from bambi.airdata.air_data_frame import AirDataFrame
 from bambi.geo.calibration import remap, undistort_maps
 from bambi.thermal.thermal_colorizer import ThermalColorizer
 
+#: Heading sources a photo extractor supports. Photos come with a flight log
+#: (AirData, or one rebuilt from EXIF) but no SRT, so only the two flight-log
+#: headings exist; the SRT sources of TimedPoseExtractor are video-only.
+PHOTO_HEADING_SOURCES: Tuple[str, ...] = ("airdata_compass", "airdata_gimbal")
+
 # DJI filename pattern: DJI_YYYYMMDDHHMMSS_NNNN_X.JPG (or .jpg)
 DJI_FILENAME_PATTERN = re.compile(
     r"DJI_(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})_\d+.*\.\w+$"
@@ -491,7 +496,7 @@ class PhotoPoseExtractor:
         include_gps: bool = True,
         mask_images: bool = False,
         thermal_colorizer: Optional[ThermalColorizer] = None,
-        use_gimbal_heading: bool = False,
+        heading_source: str = "airdata_compass",
     ):
         """
         :param rel_transformer: Transforms WGS-84 (lat, lon) to projected CRS.
@@ -517,9 +522,23 @@ class PhotoPoseExtractor:
             rather than being read as ordinary RGB images with ``cv2.imread``.
             Requires *calibration_res* to also be set (images are only written
             to *output_image_dir* when an undistorter is active).
-        :param use_gimbal_heading: When True, use frame.gimbal_heading instead of
-            frame.compass_heading for the yaw rotation.
+        :param heading_source: Where the yaw of every pose comes from. Supported
+            (:data:`PHOTO_HEADING_SOURCES`):
+
+            - ``"airdata_compass"`` (default): the drone body's compass heading
+              from the flight log.
+            - ``"airdata_gimbal"``: the gimbal heading from the flight log. Use it
+              when the gimbal holds its heading while the drone yaws.
+
+            The SRT sources of :class:`TimedPoseExtractor` (``"srt_gimbal"``,
+            ``"srt_drone"``) are not supported - photos have no SRT - and raise
+            ``ValueError``. Same keyword and values as the video extractor.
         """
+        if heading_source not in PHOTO_HEADING_SOURCES:
+            raise ValueError(
+                f"Heading source {heading_source!r} is not supported for photos; "
+                f"expected one of {PHOTO_HEADING_SOURCES} (photos have no SRT)."
+            )
         if calibration_res is None and fovy is None:
             raise ValueError(
                 "Either 'fovy' or 'calibration_res' must be provided."
@@ -536,7 +555,7 @@ class PhotoPoseExtractor:
         self.include_gps = include_gps
         self.mask_images = mask_images
         self._thermal_colorizer = thermal_colorizer
-        self.use_gimbal_heading = use_gimbal_heading
+        self.heading_source = heading_source
 
         # Build undistorter if calibration is available
         self._undistorter: Optional[PhotoUndistorter] = None
@@ -706,6 +725,7 @@ class PhotoPoseExtractor:
             )
 
         # -- write to disk ------------------------------------------------
+        result["heading_source"] = self.heading_source
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         with open(output_path, "w", encoding="UTF-8") as fh:
             json.dump(result, fh, indent=2)
@@ -880,7 +900,11 @@ class PhotoPoseExtractor:
             else 0.0
         )
 
-        heading = frame.gimbal_heading if self.use_gimbal_heading else frame.compass_heading
+        heading = (
+            frame.gimbal_heading
+            if self.heading_source == "airdata_gimbal"
+            else frame.compass_heading
+        )
         rotation = [
             float(frame.gimbal_pitch) + 90
             if frame.gimbal_pitch is not None
@@ -1027,6 +1051,7 @@ class OrderedPhotoPoseExtractor(PhotoPoseExtractor):
                 f"and were skipped."
             )
 
+        result["heading_source"] = self.heading_source
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         with open(output_path, "w", encoding="UTF-8") as fh:
             json.dump(result, fh, indent=2)
@@ -1168,6 +1193,7 @@ class UniqueMatchPhotoPoseExtractor(PhotoPoseExtractor):
                 f"and were skipped."
             )
 
+        result["heading_source"] = self.heading_source
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         with open(output_path, "w", encoding="UTF-8") as fh:
             json.dump(result, fh, indent=2)
