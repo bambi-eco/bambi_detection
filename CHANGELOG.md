@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.1.0 - 2026-11-03
+
+### Added
+- **Heading source.** `TimedPoseExtractor(heading_source=...)` picks the yaw of
+  every pose: `airdata_compass` (default, as before), `airdata_gimbal`,
+  `srt_gimbal` (the SRT `gb_yaw` of each frame, not interpolated) or
+  `srt_drone` (the SRT drone yaw, which only some DJI models write; extraction
+  stops with a clear error when it is missing). On a bat-following M30T flight
+  the AirData and SRT gimbal headings differed by a constant 2.4 deg, so which
+  one is right can depend on the drone.
+  **Breaking:** this replaces `TimedPoseExtractor(use_gimbal_heading=...)`;
+  pass `heading_source="airdata_gimbal"` instead of `use_gimbal_heading=True`.
+  The photo extractors (`PhotoPoseExtractor` and its Ordered/UniqueMatch
+  subclasses) take the same keyword, limited to `airdata_compass` and
+  `airdata_gimbal` (`PHOTO_HEADING_SOURCES`; photos have no SRT, the SRT
+  sources raise `ValueError`), and record it in their `poses.json` too.
+  The legacy `PoseExtractor` takes it as well, limited to the file its parser
+  reads: `airdata_compass`/`airdata_gimbal` with `AirDataParser`,
+  `srt_drone`/`srt_gimbal` with `AirDataFromSrtParser`. Left out, it uses the
+  heading it used before (compass / SRT drone yaw).
+- **Flight log margin.** `TimedPoseExtractor(airdata_video_padding_ms=...)`
+  keeps that much AirData log before the first and after the last `isVideo`
+  row. DJI can set the flag about 1 s after the recording starts, so the first
+  frames lay outside the log slice and their positions were extrapolated (4 m
+  off on a fast flight; 0.13 m with 3000 ms). Default 0 keeps the previous
+  poses; 3000 is the recommended value.
+- **Heading check.** `poses.json` now records `heading_source`,
+  `airdata_video_padding_ms` and `heading_check` (spread of compass vs gimbal
+  heading over the video). When the compass moves more than 2 deg beyond the
+  gimbal - the body yawed while the camera held its heading - and a compass
+  source is in use, a `UserWarning` names the recommended source.
+
+### Fixed
+- **Flight-log gaps no longer point north.** Frames converted from the SRT to
+  fill AirData gaps took their compass heading from the SRT drone yaw, which
+  most SRTs do not have; `None` was then interpolated as 0 deg. Missing headings
+  are now interpolated from the neighbouring AirData rows, and SRT angles
+  (-180..180) are normalised to AirData's 0..360.
+- `AirDataParser.get_frames_video_offset` raised `NameError` instead of its
+  `ValueError` when no video/photo frames were found.
+
 ## 1.0.2 - 2026-10-07
 
 ### Fixed
