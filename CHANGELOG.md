@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1 - 2026-11-09
+
+### Fixed
+- **`bambi.io.poses` keeps the duplicated flag.** `read_poses` now exposes
+  `PosesFile.duplicated`, an `(N,)` bool array (all False when the file has no
+  `"duplicated"` keys), and `write_poses(duplicated=...)` writes
+  `"duplicated": true` on flagged frames. Before, reading and rewriting a
+  `poses.json` from `extract(flag_duplicates=True)` silently dropped the flag.
+
 ## 1.2.0 - 2026-11-09
 
 ### Added

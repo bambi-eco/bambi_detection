@@ -6,7 +6,10 @@ Two schemas exist in the wild and both are handled:
 * **pipeline** (``poses.json`` / ``poses_t.json`` written by the extractors and
   consumed by the QGIS plugin): each image carries DEM-local ``location`` and
   ``rotation`` (plus ``fovy``, ``lat``/``lng``, ``timestamp``, ``imagefile``),
-  and the file carries an ``origin`` block.
+  and the file carries an ``origin`` block. Frames extracted with
+  ``TimedPoseExtractor.extract(flag_duplicates=True)`` also carry
+  ``"duplicated": true`` (a frozen thermal frame, e.g. during shutter
+  calibration); other frames carry no such key.
 * **public dataset** (``<flight>_matched_poses.json`` from bambi-eco/Dataset):
   each image carries geographic ``lat``/``lng``/``alt`` and ``pitch``/``roll``/
   ``yaw``, plus an ``origin`` block. There is no ``location``; converting to
@@ -29,7 +32,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -63,6 +66,15 @@ class PosesFile:
     origin: Optional[Dict[str, float]]
     #: every top-level key that is not ``images`` (drone, camera, mask, ...)
     header: Dict[str, Any] = field(default_factory=dict)
+    #: ``(N,)`` True where the image carries ``"duplicated": true``; all False
+    #: when the file has no such key (or when left as ``None``)
+    duplicated: Optional[NDArray[np.bool_]] = None
+
+    def __post_init__(self) -> None:
+        if self.duplicated is None:
+            self.duplicated = np.zeros(len(self.imagefiles), dtype=bool)
+        else:
+            self.duplicated = np.asarray(self.duplicated, dtype=bool)
 
     def __len__(self) -> int:
         return len(self.imagefiles)
@@ -126,6 +138,7 @@ def read_poses(path: PathLike) -> PosesFile:
         imagefiles=[str(im.get("imagefile", "")) for im in images],
         timestamps=[str(im.get("timestamp", "")) for im in images],
         origin=origin, header=header,
+        duplicated=np.array([bool(im.get("duplicated", False)) for im in images], dtype=bool),
     )
 
 
@@ -160,7 +173,8 @@ def to_local_poses(pf: PosesFile, epsg: int, origin: Optional[Origin] = None,
 def write_poses(path: PathLike, poses: Poses, imagefiles: List[str],
                 fovy: Optional[NDArray] = None, lla: Optional[NDArray] = None,
                 timestamps: Optional[List[str]] = None,
-                header: Optional[Dict[str, Any]] = None) -> None:
+                header: Optional[Dict[str, Any]] = None,
+                duplicated: Optional[Sequence[bool]] = None) -> None:
     """Write DEM-local poses in the pipeline schema.
 
     :param path: destination JSON
@@ -170,10 +184,14 @@ def write_poses(path: PathLike, poses: Poses, imagefiles: List[str],
     :param lla: ``(N, 3)`` ``[lat, lon, alt]``; written as ``lat``/``lng`` when given
     :param timestamps: per-pose ISO timestamps
     :param header: extra top-level keys (drone, camera, mask, samplingRate)
+    :param duplicated: per-pose flags; ``"duplicated": true`` is written where
+        True, nothing where False (the extractors' convention)
     """
     n = len(poses)
     if len(imagefiles) != n:
         raise ValueError(f"{len(imagefiles)} imagefiles for {n} poses")
+    if duplicated is not None and len(duplicated) != n:
+        raise ValueError(f"{len(duplicated)} duplicated flags for {n} poses")
     images = []
     for i in range(n):
         im: Dict[str, Any] = {
@@ -188,6 +206,8 @@ def write_poses(path: PathLike, poses: Poses, imagefiles: List[str],
             im["lng"] = float(lla[i, 1])
         if timestamps is not None and timestamps[i]:
             im["timestamp"] = timestamps[i]
+        if duplicated is not None and duplicated[i]:
+            im["duplicated"] = True
         images.append(im)
     out: Dict[str, Any] = dict(header or {})
     out["origin"] = poses.origin.as_dict()

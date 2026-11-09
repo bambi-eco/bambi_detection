@@ -121,6 +121,44 @@ def test_write_rejects_length_mismatch(tmp_path):
         write_poses(tmp_path / "bad.json", poses, ["only-one.jpg"])
 
 
+
+# ---------------------------------------------------------------- duplicated frames
+
+def _with_duplicate(path):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["images"][1]["duplicated"] = True
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_reads_duplicated_flag(tmp_path):
+    pf = read_poses(_with_duplicate(_pipeline_file(tmp_path)))
+    assert pf.duplicated.dtype == bool
+    assert pf.duplicated.tolist() == [False, True]
+
+
+def test_duplicated_defaults_to_all_false(tmp_path):
+    assert read_poses(_pipeline_file(tmp_path)).duplicated.tolist() == [False, False]
+    assert read_poses(_geographic_file(tmp_path)).duplicated.tolist() == [False, False]
+
+
+def test_write_round_trips_duplicated_flag(tmp_path):
+    src = read_poses(_with_duplicate(_pipeline_file(tmp_path)))
+    out = tmp_path / "out.json"
+    write_poses(out, to_local_poses(src, epsg=32633), src.imagefiles, duplicated=src.duplicated)
+    assert read_poses(out).duplicated.tolist() == [False, True]
+    # only flagged frames carry the key, like the extractors write it
+    raw = json.loads(out.read_text(encoding="utf-8"))
+    assert "duplicated" not in raw["images"][0]
+    assert raw["images"][1]["duplicated"] is True
+
+
+def test_write_rejects_duplicated_length_mismatch(tmp_path):
+    src = read_poses(_pipeline_file(tmp_path))
+    with pytest.raises(ValueError):
+        write_poses(tmp_path / "bad.json", to_local_poses(src, epsg=32633), src.imagefiles,
+                    duplicated=[True])
+
 def test_epochs_from_timestamps():
     from bambi.io.poses import epochs_from_timestamps
     e = epochs_from_timestamps(["2023-01-19T11:39:00+01:00", "", "garbage", "2023-01-19T11:39:01.5+01:00"])
