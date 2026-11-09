@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-11-09
+
+### Added
+- **Flag duplicate frames.** `TimedPoseExtractor.extract(flag_duplicates=True)`
+  keeps duplicate thermal frames (e.g. while the shutter is closed for
+  calibration) and marks them with `"duplicated": true` in `poses.json`
+  instead of dropping them. Frames that are not duplicates carry no such key.
+  Default `False` keeps the previous behaviour (`remove_duplicates` drops them).
+  The video frame accessors take a matching `duplicate_indices` set.
+
 ## 1.1.0 - 2026-11-03
 
 ### Added

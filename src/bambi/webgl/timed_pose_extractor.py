@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import tzinfo
 from itertools import islice
 from numbers import Number
-from typing import Any, List, Optional, Union, Final, Sequence, Tuple
+from typing import Any, List, Optional, Set, Union, Final, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -63,6 +63,8 @@ class TimedFrameExtractorCallback:
     selected_indices: Optional[set] = None  # None means all indices are processed
     no_images: bool = False
     image_srt_frames: Optional[List[SrtFrame]] = None  # if set, receives the SRT frame of every image
+    duplicate_indices: Optional[Set[int]] = None  # indices of frames the accessor flagged as duplicates
+    image_duplicates: Optional[List[bool]] = None  # if set, receives the duplicate flag of every image
 
     def __call__(self, idx: int, img: npt.NDArray[Any]) -> bool:
 
@@ -86,6 +88,8 @@ class TimedFrameExtractorCallback:
         self.image_timestamps.append(timestamp)
         if self.image_srt_frames is not None:
             self.image_srt_frames.append(frame)
+        if self.image_duplicates is not None:
+            self.image_duplicates.append(self.duplicate_indices is not None and idx in self.duplicate_indices)
 
         return True
 
@@ -537,6 +541,7 @@ class TimedPoseExtractor:
         remove_duplicates: bool = True,
         timezone: tzinfo = TIMEZONE_VIENNA,
         no_images: bool = False,
+        flag_duplicates: bool = False,
     ) -> Sequence[tuple[int, int]]:
         """
         Method used to extract normalized video frames together with a JSON file describing the relative position between the first frame and the others
@@ -555,6 +560,8 @@ class TimedPoseExtractor:
         :param overwrite_existing: Flag that signals if existing files should be overwritten. default is False.
         :param remove_duplicates: Flag that signals if duplicate frames should be removed. default is True.
         :param no_images: If True, no per-frame image data is written to disk; only the poses.json file and the mask are created
+        :param flag_duplicates: If True, duplicate thermal frames (e.g. while the shutter is closed for calibration) are kept
+            and marked with "duplicated": true in poses.json instead of being dropped. Takes precedence over remove_duplicates.
         :return:
         """
         if isinstance(video_paths, str):
@@ -567,6 +574,7 @@ class TimedPoseExtractor:
         image_files: list[str] = []
         image_timestamps: list[datetime.datetime] = []
         image_srt_frames: list[SrtFrame] = []
+        image_duplicates: list[bool] = []
 
         # match SRT/video frames with AirData frames
         srt_frames, num_videos, frame_to_video = self.get_srt_frames(srt_data_paths, timezone=timezone)
@@ -588,7 +596,7 @@ class TimedPoseExtractor:
         selected_global = set(global_indices)
 
         check_duplicate_func = (
-            image_equality_check if self.camera_name == Camera.Thermal and remove_duplicates
+            image_equality_check if self.camera_name == Camera.Thermal and (remove_duplicates or flag_duplicates)
             else None
         )
 
@@ -608,6 +616,9 @@ class TimedPoseExtractor:
                 continue  # no frames selected for this video
 
             srt_video_frames = np.array(srt_frames)[frame_to_video_arr == iv]
+            duplicate_indices: Optional[Set[int]] = (
+                set() if flag_duplicates and check_duplicate_func is not None else None
+            )
 
             # create callback that is called for every frame
             callback = TimedFrameExtractorCallback(
@@ -621,12 +632,18 @@ class TimedPoseExtractor:
                 selected_indices=selected_local,
                 no_images=no_images,
                 image_srt_frames=image_srt_frames,
+                duplicate_indices=duplicate_indices,
+                image_duplicates=image_duplicates,
             )
 
+            access_kwargs: dict[str, Any] = {}
+            if duplicate_indices is not None:
+                access_kwargs["duplicate_indices"] = duplicate_indices
             self.frame_accessor.access(
                 video_path,
                 callback,
                 check_duplicate_function=check_duplicate_func,
+                **access_kwargs,
             )
 
         # interpolate AirData frames to match the image timestamps
@@ -672,6 +689,9 @@ class TimedPoseExtractor:
 
             if isinstance(self.frame_accessor, CalibratedVideoFrameAccessor):
                 current_dict["fovy"] = (self.frame_accessor.undistortion_parameters.fovy,)
+
+            if image_duplicates[i]:
+                current_dict["duplicated"] = True
 
             if include_gps:
                 current_dict["lat"] = frame.latitude

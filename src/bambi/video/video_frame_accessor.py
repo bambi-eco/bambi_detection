@@ -1,6 +1,6 @@
 # pylint: disable=R0201
 import os.path
-from typing import Any, Callable, Generator, List, Optional, Tuple
+from typing import Any, Callable, Generator, List, Optional, Set, Tuple
 
 import cv2
 import numpy.typing as npt
@@ -24,6 +24,7 @@ class VideoFrameAccessor:
             Callable[[npt.NDArray[Any], npt.NDArray[Any]], bool]
         ] = None,
         read_grayscale: bool = False,
+        duplicate_indices: Optional[Set[int]] = None,
     ) -> Generator[Tuple[int, npt.NDArray[Any]], None, None]:
         """
         Method that allows to access video frames, yielding the individual frames
@@ -33,6 +34,7 @@ class VideoFrameAccessor:
         :param limit: Number of frames that should be accessed
         :param check_duplicate_function: Method allowing to check if two frames are duplicated (still frames). Duplicated frames are ignored if parameter is not None
         :param read_grayscale: Flag if video should be read grayscale or bgr
+        :param duplicate_indices: If given, duplicated frames are not dropped but yielded, and their index is added to this set
         :return: Generator of the frames
         """
         capture = None
@@ -49,11 +51,14 @@ class VideoFrameAccessor:
             frames_after_skip = 0
             used_frames = 0
             while success:
-                if (
-                    check_duplicate_function is None
-                    or previous is None
-                    or not check_duplicate_function(image, previous)
-                ):
+                is_duplicate = (
+                    check_duplicate_function is not None
+                    and previous is not None
+                    and check_duplicate_function(image, previous)
+                )
+                if is_duplicate and duplicate_indices is not None:
+                    duplicate_indices.add(count)
+                if not is_duplicate or duplicate_indices is not None:
                     if count >= skip:
                         if sampling_rate == 0 or frames_after_skip % sampling_rate == 0:
                             yield (count, image)
@@ -81,6 +86,7 @@ class VideoFrameAccessor:
             Callable[[npt.NDArray[Any], npt.NDArray[Any]], bool]
         ] = None,
         read_grayscale: bool = False,
+        duplicate_indices: Optional[Set[int]] = None,
     ) -> None:
         """
         Method that allows to access video frames, calling a given callback function for every frame
@@ -91,6 +97,7 @@ class VideoFrameAccessor:
         :param limit: Number of frames that should be accessed
         :param check_duplicate_function: Method allowing to check if two frames are duplicated (still frames). Duplicated frames are ignored if parameter is not None
         :param read_grayscale: Flag if video should be read grayscale or bgr
+        :param duplicate_indices: If given, duplicated frames are not dropped but passed to the callback, and their index is added to this set
         :return: None
         """
         for (idx, frame) in self.access_yield(
@@ -100,6 +107,7 @@ class VideoFrameAccessor:
             limit,
             check_duplicate_function,
             read_grayscale,
+            duplicate_indices,
         ):
             if not callback(idx, frame):
                 break

@@ -1,5 +1,5 @@
 # pylint: disable=R0201
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -41,6 +41,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
             Callable[[npt.NDArray[Any], npt.NDArray[Any]], bool]
         ] = None,
         read_grayscale: bool = False,
+        duplicate_indices: Optional[Set[int]] = None,
     ) -> Generator[Tuple[int, npt.NDArray[Any]], None, None]:
         """
         Method that allows to access video frames in a generator like way
@@ -50,6 +51,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
         :param limit: Number of frames that should be accessed
         :param check_duplicate_function: Method allowing to check if two frames are duplicated (still frames). Duplicated frames are ignored if parameter is not None
         :param read_grayscale: Flag if video should be read grayscale or bgr
+        :param duplicate_indices: If given, duplicated frames are not dropped but kept, and their index is added to this set
         :return: None
         """
 
@@ -60,6 +62,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
             limit,
             check_duplicate_function,
             read_grayscale=read_grayscale,
+            duplicate_indices=duplicate_indices,
         ):
             yield idx, self.undistort(frame)
 
@@ -74,6 +77,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
             Callable[[npt.NDArray[Any], npt.NDArray[Any]], bool]
         ] = None,
         read_grayscale: bool = False,
+        duplicate_indices: Optional[Set[int]] = None,
     ) -> UndistortionParameters:
         """
         Method that allows to access video frames, calling a given callback function for every frame
@@ -85,6 +89,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
         :param limit: Number of frames that should be accessed
         :param check_duplicate_function: Method allowing to check if two frames are duplicated (still frames). Duplicated frames are ignored if parameter is not None
         :param read_grayscale: Flag if video should be read grayscale or bgr
+        :param duplicate_indices: If given, duplicated frames are not dropped but kept, and their index is added to this set
         :return: Calibration parameters used to undistort image
         """
         for (idx, frame) in self.access_yield(
@@ -94,6 +99,7 @@ class CalibratedVideoFrameAccessor(VideoFrameAccessor):
             limit,
             check_duplicate_function,
             read_grayscale=read_grayscale,
+            duplicate_indices=duplicate_indices,
         ):
             if not callback(idx, frame):
                 break

@@ -179,7 +179,26 @@ class _FakeAccessor:
                 break
 
 
-def _run(tmp_path, monkeypatch, **kw):
+class _DuplicateAccessor(_FakeAccessor):
+    """Treats the frames in `duplicates` as still frames, like the real accessor does."""
+
+    def __init__(self, n, duplicates):
+        super().__init__(n)
+        self.duplicates = set(duplicates)
+
+    def access(self, video_path, callback, check_duplicate_function=None, duplicate_indices=None):
+        img = np.zeros((4, 4, 3), np.uint8)
+        for i in range(self.n):
+            is_duplicate = check_duplicate_function is not None and i in self.duplicates
+            if is_duplicate and duplicate_indices is None:
+                continue  # dropped
+            if is_duplicate:
+                duplicate_indices.add(i)
+            if not callback(i, img):
+                break
+
+
+def _run(tmp_path, monkeypatch, accessor=None, extract_kw=None, **kw):
     frames = _frames()
     frames[19].isVideo = 0  # recording flag starts at row 20 (4000 ms)
     srt = _srt(n=12, start_ms=3600)  # first two video frames before the flag
@@ -188,9 +207,10 @@ def _run(tmp_path, monkeypatch, **kw):
     monkeypatch.setattr(tpe.AirDataParser, "parse", lambda self, path: frames)
     monkeypatch.setattr(tpe.AirDataParser, "get_frames_video_offset", staticmethod(lambda f, ts: 0))
     monkeypatch.setattr(TimedPoseExtractor, "_get_srt_air_data_offset", staticmethod(lambda s, a: 0.0))
-    ex = TimedPoseExtractor(_FakeAccessor(len(srt)), **kw)
+    ex = TimedPoseExtractor(accessor or _FakeAccessor(len(srt)), **kw)
+    extract_kw = {"remove_duplicates": False, **(extract_kw or {})}
     ex.extract(str(tmp_path), "ad.csv", "v.mp4", "v.srt", no_images=True, mask_images=False,
-               remove_duplicates=False, timezone=tpe.TIMEZONE_UTC)
+               timezone=tpe.TIMEZONE_UTC, **extract_kw)
     return json.loads((tmp_path / "poses.json").read_text())
 
 
@@ -207,3 +227,43 @@ def test_poses_use_srt_gimbal_and_padding(tmp_path, monkeypatch):
     assert poses["heading_source"] == "srt_gimbal"
     assert poses["airdata_video_padding_ms"] == 3000
     assert all(img["rotation"][2] == pytest.approx(257.2) for img in poses["images"])
+
+
+# --- duplicate (still) thermal frames ------------------------------------------
+
+def test_duplicate_frames_are_dropped_by_default(tmp_path, monkeypatch):
+    poses = _run(tmp_path, monkeypatch, accessor=_DuplicateAccessor(12, {3, 4}),
+                 extract_kw={"remove_duplicates": True})
+    assert len(poses["images"]) == 10
+    assert all("duplicated" not in img for img in poses["images"])
+
+
+def test_duplicate_frames_can_be_flagged_instead(tmp_path, monkeypatch):
+    poses = _run(tmp_path, monkeypatch, accessor=_DuplicateAccessor(12, {3, 4}),
+                 extract_kw={"flag_duplicates": True})
+    images = poses["images"]
+    assert len(images) == 12
+    assert [i for i, img in enumerate(images) if img.get("duplicated")] == [3, 4]
+    assert all("duplicated" not in img for i, img in enumerate(images) if i not in (3, 4))
+
+
+def test_video_frame_accessor_flags_duplicates(tmp_path):
+    import cv2
+    from bambi.util.image_utils import image_equality_check
+    from bambi.video.video_frame_accessor import VideoFrameAccessor
+
+    path = str(tmp_path / "v.avi")
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), 10, (32, 32))
+    for value in (0, 100, 100, 100, 200):  # frames 2 and 3 repeat frame 1
+        writer.write(np.full((32, 32, 3), value, np.uint8))
+    writer.release()
+
+    accessor = VideoFrameAccessor()
+    dropped = [i for i, _ in accessor.access_yield(path, check_duplicate_function=image_equality_check)]
+    assert dropped == [0, 1, 4]
+
+    duplicates = set()
+    kept = [i for i, _ in accessor.access_yield(path, check_duplicate_function=image_equality_check,
+                                                duplicate_indices=duplicates)]
+    assert kept == [0, 1, 2, 3, 4]
+    assert duplicates == {2, 3}
