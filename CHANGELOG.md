@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.2 - 2026-11-16
+
+### Fixed
+- **The uncertainty of the ZINB density (`bambi.survey.population`).** The
+  standard error added up the variances of the transects' fitted values,
+  `sqrt(sum(se^2))`, as the R script does - as if the fitted values were
+  independent. They all come from the same four parameters, so they rise and
+  fall together, and the variance of their sum is far larger. The standard
+  error is now the delta method's for the sum itself, `sqrt(g' V g)` with `g`
+  the summed gradients, and the 95 % interval is log-normal
+  (`density_interval`, new and public), so it no longer reaches below zero.
+  On the reference cell of Praschl et al. 2026 the standard error goes from
+  2.50 to 9.19 and the interval from 27.8-37.6 to 19.0-56.1 animals per
+  100 ha. In 100 simulated surveys of 40 transects the old interval held the
+  true density 31 times, the new one 92 times (it should be 95).
+  **The density itself is unchanged** and still reproduces glmmTMB's;
+  `abundance_ci95` follows the new interval. The QGIS plugin has reported
+  this standard error since its 9.1; the two agree again.
+
 ## 1.2.1 - 2026-11-09
 
 ### Fixed

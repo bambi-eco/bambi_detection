@@ -152,21 +152,78 @@ class TestZinbAgainstGlmmTMB:
                       1.949574, 1.996594, 2.132053, 2.241751, 2.628096, 2.875178, 1.778265, 1.988550, 2.199333,
                       2.257071, 2.149337, 2.208404, 1.845604]
 
+    @staticmethod
+    def _se_as_the_r_script_adds_it_up(counts, areas, r):
+        """``sqrt(sum(se_fit^2)) / sum(ha) * 100`` - the transects' variances added up as if their
+        fitted values were independent. It is not what is reported any more, but it is what
+        glmmTMB's ``se_zinb`` is, so it still tells whether the fit and its covariance are glmmTMB's."""
+        y, x = np.asarray(counts, dtype=float), np.asarray(areas, dtype=float)
+        p_zero = r.zero_inflation_prob
+        params = np.array([r.intercept, r.slope_ha, math.log(r.theta), math.log(p_zero / (1.0 - p_zero))])
+        covariance = np.linalg.inv(pop._numeric_hessian(lambda q: pop._zinb_nll(q, y, x), params))
+        fitted = (1.0 - p_zero) * np.exp(params[0] + params[1] * x)
+        gradients = np.column_stack([fitted, fitted * x, np.zeros_like(fitted), -fitted * p_zero])
+        each = np.einsum("ij,jk,ik->i", gradients, covariance, gradients)
+        return math.sqrt(each.sum()) / x.sum() * pop.HA_PER_KM2
+
     def test_multimodal_cell_reaches_the_global_optimum(self):
         r = pop.estimate_zinb(self.LEMBACH_COUNTS, self.LEMBACH_AREAS)
         assert r.density_per_100ha == pytest.approx(57.313, rel=1e-3)      # glmmTMB dens_zinb
-        assert r.se == pytest.approx(29.847, rel=1e-2)                     # glmmTMB se_zinb
+        assert self._se_as_the_r_script_adds_it_up(                        # glmmTMB se_zinb
+            self.LEMBACH_COUNTS, self.LEMBACH_AREAS, r) == pytest.approx(29.847, rel=1e-2)
         assert r.density_per_100ha > 57.0 and r.error is None              # not the 56.41 local optimum
 
-    def test_identified_cell_matches_density_and_se(self):
+    def test_identified_cell_matches_density_and_covariance(self):
         r = pop.estimate_zinb(self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS)
         assert r.density_per_100ha == pytest.approx(32.672, rel=1e-3)
-        assert r.se == pytest.approx(2.495, rel=1e-2)
-        assert r.ci95[0] == pytest.approx(27.78, abs=0.05) and r.ci95[1] == pytest.approx(37.56, abs=0.05)
+        assert self._se_as_the_r_script_adds_it_up(
+            self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS, r) == pytest.approx(2.495, rel=1e-2)
         assert r.error is None
+
+    def test_the_reported_uncertainty_is_that_of_the_sum(self):
+        """The fitted values of the transects all come from the same four parameters, so they move
+        together: the variance of their sum is far larger than the sum of their variances. glmmTMB's
+        2.495 (interval 27.8 to 37.6) became 9.19 (19.0 to 56.1) on the same fit."""
+        r = pop.estimate_zinb(self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS)
+        assert r.se == pytest.approx(9.187, rel=1e-2)
+        assert r.ci95[0] == pytest.approx(19.03, abs=0.2) and r.ci95[1] == pytest.approx(56.10, abs=0.5)
+        assert r.ci95 == pop.density_interval(r.density_per_100ha, r.se)
+
+        lembach = pop.estimate_zinb(self.LEMBACH_COUNTS, self.LEMBACH_AREAS)
+        assert lembach.se == pytest.approx(35.823, rel=1e-2)
+        assert lembach.ci95[0] > 0                                         # log-normal: never below zero
+        assert lembach.density_per_100ha - 1.96 * lembach.se < 0           # the symmetric one would be
+
+    def test_the_abundance_carries_the_same_interval(self):
+        r = pop.estimate_population(self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS, methods=("zinb",),
+                                    study_area_ha=500.0).zinb
+        assert r.abundance_study_area == pytest.approx(r.density_per_100ha * 5.0)
+        assert r.abundance_ci95 == pytest.approx((r.ci95[0] * 5.0, r.ci95[1] * 5.0))
+        assert r.abundance_ci95[0] == pytest.approx(95.2, abs=1.0)
 
     def test_naive_matches_r_exactly(self):
         assert pop.estimate_naive(self.LEMBACH_COUNTS, self.LEMBACH_AREAS).density_per_100ha == pytest.approx(39.481, rel=1e-4)
+
+
+class TestDensityInterval:
+    """The 95 % interval of a density: log-normal, so never below zero."""
+
+    def test_it_holds_the_estimate_and_stays_above_zero(self):
+        low, high = pop.density_interval(10.0, 8.0)
+        assert 0.0 < low < 10.0 < high
+        assert 10.0 - 1.96 * 8.0 < 0.0                                     # the symmetric interval reaches to -5.7
+
+    def test_it_is_symmetric_in_the_ratio(self):
+        low, high = pop.density_interval(32.0, 9.0)
+        assert 32.0 / low == pytest.approx(high / 32.0)
+
+    def test_a_small_uncertainty_gives_nearly_the_usual_interval(self):
+        low, high = pop.density_interval(100.0, 2.0)
+        assert low == pytest.approx(100.0 - 1.96 * 2.0, abs=0.1) and high == pytest.approx(100.0 + 1.96 * 2.0, abs=0.1)
+
+    def test_nothing_to_spread(self):
+        assert pop.density_interval(0.0, 1.0) == (0.0, 0.0)
+        assert pop.density_interval(5.0, 0.0) == (5.0, 5.0)
 
 
 class TestEstimatePopulation:
@@ -200,6 +257,7 @@ def test_matches_the_plugin_module():
     got = pop.estimate_zinb(TestZinbAgainstGlmmTMB.LEMBACH_COUNTS, TestZinbAgainstGlmmTMB.LEMBACH_AREAS)
     assert got.density_per_100ha == pytest.approx(ref["density_per_100ha"], rel=1e-9)
     assert got.se == pytest.approx(ref["se"], rel=1e-6)
+    assert list(got.ci95) == pytest.approx(ref["ci95"], rel=1e-6)
     assert got.log_likelihood == pytest.approx(ref["log_likelihood"], rel=1e-9)
     b = pop.estimate_bootstrap(TestEstimatePopulation.COUNTS, TestEstimatePopulation.AREAS, 500, 3)
     rb = ppop.estimate_bootstrap(TestEstimatePopulation.COUNTS, TestEstimatePopulation.AREAS, 500, 3)

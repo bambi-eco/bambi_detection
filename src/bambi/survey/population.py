@@ -17,8 +17,23 @@ a density in animals per 100 ha (= per km^2):
     ``glmmTMB(count ~ ha, ziformula = ~1, family = nbinom2)``, fitted by
     maximum likelihood from a deterministic grid of starts (the likelihood
     is multimodal). Density ``sum(fitted) / sum(ha) * 100`` with fitted
-    values on the response scale, SE by the delta method combined as
-    ``sqrt(sum(se^2)) / sum(ha) * 100`` - exactly as in R.
+    values on the response scale; its SE is the delta method's for that
+    sum - see "Uncertainty" below.
+
+**Uncertainty of the ZINB density.** The R script adds up the squared
+standard errors of the transects' fitted values, ``sqrt(sum(se^2))``, as if
+the fitted values were independent. They are not: every one of them is a
+function of the same four parameters, so they rise and fall together, and
+the variance of their sum is far larger than the sum of their variances -
+by about the number of transects. Up to 1.2.1 this module reproduced the R
+figure; an interval built on it held the true density in 31 of 100
+simulated surveys (40 transects, overdispersed counts, 40 % structural
+zeros), where it should hold it in 95 - the interval reported now held it
+in 92. The standard error is now the delta method's for the sum itself,
+``sqrt(g' V g) / sum(ha) * 100`` with ``g`` the sum of the transects'
+gradients and ``V`` the covariance of the parameters, and the interval is
+log-normal (:func:`density_interval`), so it cannot reach below zero. The
+density itself is unchanged, and still reproduces glmmTMB's.
 
 The two inputs a survey has to build first, also here:
 
@@ -29,9 +44,9 @@ The two inputs a survey has to build first, also here:
 * **areas** - :func:`merged_footprint_area` unions the per-frame ground
   footprints of the frames inside a transect.
 
-Numbers agree with the QGIS plugin's ``core/population.py`` (and through it
-with glmmTMB, to 0.02 % on the reference cells) - the plugin's tests are
-carried over.
+Numbers agree with the QGIS plugin's ``core/population.py`` (and, for the
+density, through it with glmmTMB, to 0.02 % on the reference cells) - the
+plugin's tests are carried over.
 """
 from __future__ import annotations
 
@@ -44,7 +59,7 @@ from numpy.typing import ArrayLike, NDArray
 
 __all__ = ["HA_PER_KM2", "assign_to_transects", "Assignment", "points_in_geometries", "merged_footprint_area",
            "geometry_rings", "NaiveEstimate", "BootstrapEstimate", "ZinbEstimate", "PopulationEstimate",
-           "estimate_naive", "estimate_bootstrap", "estimate_zinb", "estimate_population"]
+           "estimate_naive", "estimate_bootstrap", "estimate_zinb", "estimate_population", "density_interval"]
 
 #: Densities are reported per 100 ha, which is exactly 1 km^2.
 HA_PER_KM2 = 100.0
@@ -354,7 +369,30 @@ def _boundary_params(log_theta: float, gamma: float):
     return fixed, warnings
 
 
+def density_interval(density: float, se: float) -> Tuple[float, float]:
+    """The 95 % interval of a density from its standard error.
+
+    Log-normal, as is usual for densities and abundances (Burnham et al.
+    1987): the interval is ``(density / c, density * c)`` with
+    ``c = exp(1.96 * sqrt(log(1 + cv^2)))``. It cannot reach below zero,
+    which the symmetric ``density -/+ 1.96 se`` does as soon as the
+    uncertainty is large - exactly when the interval matters most.
+    """
+    if density <= 0 or se <= 0:
+        return (density, density)
+    spread = math.exp(1.96 * math.sqrt(math.log1p((se / density) ** 2)))
+    return (density / spread, density * spread)
+
+
 def _delta_method_se(nll, params, grad, total_ha, density, fixed):
+    """SE and 95 % CI of the density from the MLE covariance (delta method):
+    ``(se, ci95, error)``.
+
+    Parameters listed in *fixed* sit on a bound, where the likelihood is flat
+    and a numeric Hessian would be meaningless: they are held at their value.
+    That is only safe when the fitted values do not depend on them - their
+    column in *grad* is zero - which is checked rather than assumed.
+    """
     n_params = len(params)
     fixed = set(fixed or ())
     free = [i for i in range(n_params) if i not in fixed]
@@ -380,12 +418,18 @@ def _delta_method_se(nll, params, grad, total_ha, density, fixed):
         return None, None, singular
     if not np.all(np.isfinite(cov)):
         return None, None, singular
-    sub_grad = grad[:, free]
-    var_fitted = np.einsum("ij,jk,ik->i", sub_grad, cov, sub_grad)
-    if not np.all(np.isfinite(var_fitted)) or np.any(var_fitted < 0):
+    # The density is the *sum* of the fitted values over the summed area, so
+    # its variance is that of the sum: the transects' gradients are added up
+    # before they meet the covariance. Adding the transects' variances
+    # instead - what the R script does, and this did up to 1.2.1 - treats the
+    # fitted values as independent, while they all come from the same four
+    # parameters and move together.
+    total_grad = grad[:, free].sum(axis=0)
+    variance = float(total_grad @ cov @ total_grad)
+    if not math.isfinite(variance) or variance < 0:
         return None, None, "standard errors are not finite (singular information)"
-    se = float(math.sqrt(float(np.sum(var_fitted))) / total_ha * HA_PER_KM2)
-    return se, (density - 1.96 * se, density + 1.96 * se), None
+    se = float(math.sqrt(variance) / total_ha * HA_PER_KM2)
+    return se, density_interval(density, se), None
 
 
 def estimate_zinb(counts: ArrayLike, areas_ha: ArrayLike) -> ZinbEstimate:
